@@ -195,6 +195,7 @@ pub fn collections(c: &Connection) -> Result<Vec<CollectionRecord>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
+    drop(s);
     result
 }
 
@@ -265,6 +266,7 @@ pub fn emulators(c: &Connection) -> Result<Vec<EmulatorRecord>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
+    drop(s);
     result
 }
 
@@ -391,6 +393,7 @@ pub fn roms(c: &Connection) -> Result<Vec<RomRecord>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
+    drop(s);
     result
 }
 
@@ -406,6 +409,7 @@ fn named_times(c: &Connection, sql: &str) -> Result<Vec<NamedTime>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
+    drop(s);
     result
 }
 fn buckets(c: &Connection, sql: &str) -> Result<Vec<TimeBucket>, String> {
@@ -420,6 +424,7 @@ fn buckets(c: &Connection, sql: &str) -> Result<Vec<TimeBucket>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
+    drop(s);
     result
 }
 pub fn library_stats(c: &Connection) -> Result<LibraryStats, String> {
