@@ -15,8 +15,8 @@ use crate::{
     db,
     models::Installation,
     process_monitor::{
-        classify_process, CandidateContext, ProcessInfo, ProcessMonitor, ProcessRole, TrackedProcess,
-        EXTERNAL_SCORE_THRESHOLD, LAUNCH_SCORE_THRESHOLD,
+        classify_process, CandidateContext, ProcessInfo, ProcessMonitor, ProcessRole,
+        TrackedProcess, EXTERNAL_SCORE_THRESHOLD, LAUNCH_SCORE_THRESHOLD,
     },
 };
 
@@ -37,7 +37,10 @@ fn launch_intents() -> &'static Mutex<HashMap<String, Instant>> {
 
 fn register_launch_intent(installation_id: &str) {
     if let Ok(mut intents) = launch_intents().lock() {
-        intents.insert(installation_id.to_string(), Instant::now() + Duration::from_secs(30));
+        intents.insert(
+            installation_id.to_string(),
+            Instant::now() + Duration::from_secs(30),
+        );
     }
 }
 
@@ -87,7 +90,9 @@ fn heartbeat_is_recent(last_seen_at: Option<&str>) -> bool {
     let Ok(last_seen) = DateTime::parse_from_rfc3339(last_seen_at) else {
         return false;
     };
-    (Utc::now() - last_seen.with_timezone(&Utc)).num_seconds().abs()
+    (Utc::now() - last_seen.with_timezone(&Utc))
+        .num_seconds()
+        .abs()
         <= OLD_SESSION_RECOVERY_FRESHNESS_SECONDS
 }
 
@@ -145,7 +150,11 @@ fn role_name(process: &ProcessInfo) -> &'static str {
     }
 }
 
-fn persist_members(db_path: &Path, session_id: &str, members: &[ProcessInfo]) -> Result<(), String> {
+fn persist_members(
+    db_path: &Path,
+    session_id: &str,
+    members: &[ProcessInfo],
+) -> Result<(), String> {
     let connection = open_db(db_path)?;
     let now = Utc::now().to_rfc3339();
     for member in members {
@@ -247,7 +256,12 @@ fn finish_session(db_path: &Path, session_id: &str) -> Result<(), String> {
         params![ended_at, duration, session_id],
     ).map_err(|e| e.to_string())?;
     if changed > 0 {
-        info!(event="session_finished", session_id, duration_seconds=duration, "Sessão encerrada");
+        info!(
+            event = "session_finished",
+            session_id,
+            duration_seconds = duration,
+            "Sessão encerrada"
+        );
     }
     Ok(())
 }
@@ -346,8 +360,15 @@ fn discover_for_launch(
             if candidate.role != ProcessRole::Game || candidate.score < LAUNCH_SCORE_THRESHOLD {
                 continue;
             }
-            let metadata = format!("score={}; reasons={}", candidate.score, candidate.reasons.join(" | "));
-            if best_seen.as_ref().is_none_or(|(_, score, _)| candidate.score > *score) {
+            let metadata = format!(
+                "score={}; reasons={}",
+                candidate.score,
+                candidate.reasons.join(" | ")
+            );
+            if best_seen
+                .as_ref()
+                .is_none_or(|(_, score, _)| candidate.score > *score)
+            {
                 best_seen = Some((candidate.process, candidate.score, metadata));
             }
         }
@@ -384,12 +405,9 @@ pub fn spawn_for_launch(
         let launch_started_unix = unix_now();
         info!(event="launch_requested", installation_id=%installation.id, provider=%installation.provider, "Discovery iniciado");
 
-        let Some((process, metadata)) = discover_for_launch(
-            &installation,
-            &baseline,
-            direct_pid,
-            launch_started_unix,
-        ) else {
+        let Some((process, metadata)) =
+            discover_for_launch(&installation, &baseline, direct_pid, launch_started_unix)
+        else {
             clear_launch_intent(&installation.id);
             warn!(event="candidate_rejected", game_id=%installation.game_id, installation_id=%installation.id, reason="no_confident_candidate", "Launch ocorreu, mas nenhum processo confiável do jogo foi detectado");
             return;
@@ -438,7 +456,8 @@ fn load_steam_installations(db_path: &Path) -> Result<Vec<Installation>, String>
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 fn spawn_external_confirmation(
@@ -527,9 +546,7 @@ pub fn spawn_external_detector(db_path: PathBuf) {
 
                         for process in &new_processes {
                             let candidate = crate::process_monitor::ProcessCandidateScorer::score(
-                                &current,
-                                process,
-                                &context,
+                                &current, process, &context,
                             );
                             if candidate.role != ProcessRole::Game
                                 || candidate.score < EXTERNAL_SCORE_THRESHOLD
@@ -633,8 +650,8 @@ pub fn recover_incomplete_sessions(db_path: PathBuf) -> Result<(), String> {
         };
         drop(connection);
 
-        let identity = runtime
-            .and_then(|(pid, start, path)| Some((pid? as u32, start? as u64, path?)));
+        let identity =
+            runtime.and_then(|(pid, start, path)| Some((pid? as u32, start? as u64, path?)));
 
         if let (Some(installation), Some((pid, process_start, path))) =
             (installation.clone(), identity)
@@ -663,9 +680,11 @@ pub fn recover_incomplete_sessions(db_path: PathBuf) -> Result<(), String> {
         // Compatibilidade com sessões antigas: sem start time persistido, só retomamos se o
         // heartbeat é muito recente e PID+caminho ainda batem. Caso contrário, fechamos.
         if runtime.is_none() && heartbeat_is_recent(last_seen_at.as_deref()) {
-            if let (Some(pid), Some(path), Some(installation)) =
-                (old_pid.map(|value| value as u32), old_path.as_deref(), installation)
-            {
+            if let (Some(pid), Some(path), Some(installation)) = (
+                old_pid.map(|value| value as u32),
+                old_path.as_deref(),
+                installation,
+            ) {
                 let snapshot = ProcessMonitor::snapshot();
                 if let Some(current) = snapshot.get(pid).cloned() {
                     if current.identity_matches(pid, path, None)
@@ -747,11 +766,17 @@ mod tests {
 
     #[test]
     fn persistent_launcher_does_not_keep_session_alive() {
-        assert!(!has_legitimate_game_process(&[process("ThirdPartyLauncher.exe", 2)]));
+        assert!(!has_legitimate_game_process(&[process(
+            "ThirdPartyLauncher.exe",
+            2
+        )]));
     }
 
     #[test]
     fn anticheat_alone_does_not_start_or_keep_session() {
-        assert!(!has_legitimate_game_process(&[process("EasyAntiCheat.exe", 3)]));
+        assert!(!has_legitimate_game_process(&[process(
+            "EasyAntiCheat.exe",
+            3
+        )]));
     }
 }

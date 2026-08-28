@@ -131,8 +131,7 @@ impl ProcessCandidateScorer {
             reasons.push("processo novo (+20)".into());
         }
 
-        if let (Some(path), Some(directory)) =
-            (process.executable.as_deref(), context.install_dir)
+        if let (Some(path), Some(directory)) = (process.executable.as_deref(), context.install_dir)
         {
             if path_is_inside(Path::new(path), directory) {
                 score += 60;
@@ -221,9 +220,7 @@ impl ProcessMonitor {
                     pid,
                     ppid: process.parent().map(|value| value.as_u32()),
                     name: process.name().to_string_lossy().to_string(),
-                    executable: process
-                        .exe()
-                        .map(|path| path.to_string_lossy().to_string()),
+                    executable: process.exe().map(|path| path.to_string_lossy().to_string()),
                     command_line: process
                         .cmd()
                         .iter()
@@ -256,9 +253,9 @@ impl ProcessMonitor {
         expected_path: &str,
         expected_start_time: Option<u64>,
     ) -> bool {
-        Self::snapshot()
-            .get(pid)
-            .is_some_and(|process| process.identity_matches(pid, expected_path, expected_start_time))
+        Self::snapshot().get(pid).is_some_and(|process| {
+            process.identity_matches(pid, expected_path, expected_start_time)
+        })
     }
 
     pub fn process_matches(pid: u32, expected_path: &str) -> bool {
@@ -276,7 +273,11 @@ impl ProcessMonitor {
             .filter(|candidate| candidate.role != ProcessRole::Ignored)
             .filter(|candidate| candidate.score > 0)
             .collect::<Vec<_>>();
-        candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.process.pid.cmp(&b.process.pid)));
+        candidates.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.process.pid.cmp(&b.process.pid))
+        });
         candidates
     }
 
@@ -299,11 +300,13 @@ impl ProcessMonitor {
                 if classify_process(process) == ProcessRole::Ignored {
                     return false;
                 }
-                let inside = process.executable.as_deref().is_some_and(|path| {
-                    path_is_inside(Path::new(path), directory)
-                });
+                let inside = process
+                    .executable
+                    .as_deref()
+                    .is_some_and(|path| path_is_inside(Path::new(path), directory));
                 let related = process.pid == root_pid || descendants.contains(&process.pid);
-                let same_launch_window = process.start_time.saturating_add(3) >= session_started_unix;
+                let same_launch_window =
+                    process.start_time.saturating_add(3) >= session_started_unix;
                 related || (inside && same_launch_window)
             })
             .cloned()
@@ -353,7 +356,11 @@ pub fn classify_process(process: &ProcessInfo) -> ProcessRole {
         .and_then(|value| value.to_str())
         .unwrap_or(&name)
         .to_ascii_lowercase();
-    let value = if path_name.is_empty() { &name } else { &path_name };
+    let value = if path_name.is_empty() {
+        &name
+    } else {
+        &path_name
+    };
 
     if matches!(
         value.as_str(),
@@ -416,7 +423,13 @@ pub fn path_is_inside(path: &Path, directory: &Path) -> bool {
 mod tests {
     use super::*;
 
-    fn process(pid: u32, ppid: Option<u32>, name: &str, path: &str, start_time: u64) -> ProcessInfo {
+    fn process(
+        pid: u32,
+        ppid: Option<u32>,
+        name: &str,
+        path: &str,
+        start_time: u64,
+    ) -> ProcessInfo {
         ProcessInfo {
             pid,
             ppid,
@@ -461,14 +474,30 @@ mod tests {
             process(2, Some(1), "B.exe", "C:/B.exe", 2),
             process(3, Some(2), "C.exe", "C:/C.exe", 3),
         ]);
-        let ids = tree.descendants(1).into_iter().map(|item| item.pid).collect::<HashSet<_>>();
+        let ids = tree
+            .descendants(1)
+            .into_iter()
+            .map(|item| item.pid)
+            .collect::<HashSet<_>>();
         assert_eq!(ids, HashSet::from([2, 3]));
-        assert_eq!(tree.ancestors(3).iter().map(|item| item.pid).collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(
+            tree.ancestors(3)
+                .iter()
+                .map(|item| item.pid)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
     }
 
     #[test]
     fn anticheat_is_not_a_game_candidate_by_itself() {
-        let anti = process(20, Some(10), "EasyAntiCheat.exe", "D:/Game/EasyAntiCheat.exe", 100);
+        let anti = process(
+            20,
+            Some(10),
+            "EasyAntiCheat.exe",
+            "D:/Game/EasyAntiCheat.exe",
+            100,
+        );
         assert_eq!(classify_process(&anti), ProcessRole::AntiCheat);
         let snap = snapshot(vec![anti]);
         let baseline = HashSet::new();
@@ -531,9 +560,17 @@ mod tests {
 
     #[test]
     fn launcher_persistent_does_not_count_as_game_after_game_exits() {
-        let snap = snapshot(vec![process(2, Some(1), "ThirdPartyLauncher.exe", "D:/Game/launcher.exe", 100)]);
+        let snap = snapshot(vec![process(
+            2,
+            Some(1),
+            "ThirdPartyLauncher.exe",
+            "D:/Game/launcher.exe",
+            100,
+        )]);
         let related = ProcessMonitor::related_processes(&snap, 2, Path::new("D:/Game"), 100);
-        assert!(related.iter().all(|item| classify_process(item) != ProcessRole::Game));
+        assert!(related
+            .iter()
+            .all(|item| classify_process(item) != ProcessRole::Game));
     }
 
     #[test]
