@@ -267,7 +267,13 @@ mod tests {
     }
     #[test]
     fn filters_common_redistributables() {
-        let c = r#""AppState"{"appid" "228980" "name" "Steamworks Common Redistributables" "StateFlags" "4" "installdir" "Steamworks Shared"}"#;
+        let c = r#""AppState"
+{
+    "appid" "228980"
+    "name" "Steamworks Common Redistributables"
+    "StateFlags" "4"
+    "installdir" "Steamworks Shared"
+}"#;
         assert!(parse_appmanifest(c, Path::new("C:\\SteamLibrary"))
             .unwrap()
             .is_none());
