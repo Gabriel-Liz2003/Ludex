@@ -1,34 +1,10 @@
-name: complete-data-once
+name: complete-data-helper-disabled
+
 on:
-  push:
-    branches: ["feat/ludex-foundation"]
-permissions:
-  contents: write
+  workflow_dispatch:
+
 jobs:
-  complete:
-    if: ${{ !contains(github.event.head_commit.message, '[complete-data]') }}
+  completed:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { ref: feat/ludex-foundation }
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: rustfmt }
-      - run: python scripts/complete-data-layer.py
-      - name: Repair generated session delimiter
-        shell: python
-        run: |
-          from pathlib import Path
-          p = Path('src-tauri/src/product.rs')
-          t = p.read_text(encoding='utf-8')
-          needle = '    }}\n    if let Some(items)=data.get("metadata")'
-          replacement = '    }\n    if let Some(items)=data.get("metadata")'
-          if needle not in t:
-              raise SystemExit('generated sessions delimiter pattern not found')
-          p.write_text(t.replace(needle, replacement, 1), encoding='utf-8')
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/src
-          git commit -m "feat: complete sync saves collections and scale coverage [complete-data]" || exit 0
-          git push origin HEAD:feat/ludex-foundation
+      - run: echo "Data-layer migration helper already applied; kept disabled for audit history."
