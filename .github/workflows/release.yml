@@ -23,7 +23,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "v${{ steps.version.outputs.version }}" *> $null
-          if ($LASTEXITCODE -eq 0) { "exists=true" >> $env:GITHUB_OUTPUT } else { "exists=false" >> $env:GITHUB_OUTPUT }
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
       - if: steps.existing.outputs.exists != 'true'
         uses: actions/setup-node@v4
         with:
