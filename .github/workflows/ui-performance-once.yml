@@ -1,33 +1,10 @@
-name: frontend-repair-once
+name: frontend-repair-helper-disabled
 
 on:
-  push:
-    branches: ["feat/ludex-foundation"]
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
-  repair:
-    if: ${{ !contains(github.event.head_commit.message, '[frontend-fix]') }}
+  completed:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feat/ludex-foundation
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: python scripts/finalize-ui-performance.py
-      - run: npm install
-      - run: npm run build
-      - run: |
-          if git diff --quiet -- src/main.ts; then
-            echo "No frontend repair needed"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/main.ts
-          git commit -m "fix: repair artwork lazy-loading syntax [frontend-fix]"
-          git push origin HEAD:feat/ludex-foundation
+      - run: echo "Frontend repair completed and helper disabled."
