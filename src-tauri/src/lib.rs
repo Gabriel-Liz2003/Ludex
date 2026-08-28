@@ -210,6 +210,7 @@ pub fn run() {
             if let Err(error) = sessions::recover_incomplete_sessions(db_path.clone()) {
                 error!(%error, "Falha ao recuperar sessões incompletas");
             }
+            sessions::spawn_external_detector(db_path.clone());
             app.manage(AppState { db_path });
             Ok(())
         })
