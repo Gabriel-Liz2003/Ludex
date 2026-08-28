@@ -1,20 +1,10 @@
-name: ui-performance-once
+name: ui-performance-helper-disabled
+
 on:
-  push:
-    branches: ["feat/ludex-foundation"]
-permissions:
-  contents: write
+  workflow_dispatch:
+
 jobs:
-  apply:
-    if: ${{ !contains(github.event.head_commit.message, '[ui-performance]') }}
+  completed:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { ref: feat/ludex-foundation }
-      - run: python scripts/finalize-ui-performance.py
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/main.ts
-          git commit -m "feat: lazy-load artwork and paginate large libraries [ui-performance]" || exit 0
-          git push origin HEAD:feat/ludex-foundation
+      - run: echo "UI performance helper is disabled; an earlier queued run may still apply the versioned patch."
