@@ -1,11 +1,20 @@
-use std::{collections::HashSet, path::{Path, PathBuf}, thread, time::Duration};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{db, models::Installation, process_monitor::{ProcessMonitor, TrackedProcess}};
+use crate::{
+    db,
+    models::Installation,
+    process_monitor::{ProcessMonitor, TrackedProcess},
+};
 
 const DETECTION_ATTEMPTS: usize = 45;
 const DETECTION_INTERVAL: Duration = Duration::from_secs(2);
@@ -13,19 +22,31 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_RECOVERY_SECONDS: i64 = 18 * 60 * 60;
 
 pub fn duration_between(started_at: &str, ended_at: &str) -> i64 {
-    let Ok(start) = DateTime::parse_from_rfc3339(started_at) else { return 0; };
-    let Ok(end) = DateTime::parse_from_rfc3339(ended_at) else { return 0; };
+    let Ok(start) = DateTime::parse_from_rfc3339(started_at) else {
+        return 0;
+    };
+    let Ok(end) = DateTime::parse_from_rfc3339(ended_at) else {
+        return 0;
+    };
     (end - start).num_seconds().max(0)
 }
 
 fn safe_recovery_duration(started_at: &str, last_seen_at: Option<&str>) -> i64 {
-    let Some(last_seen_at) = last_seen_at else { return 0; };
+    let Some(last_seen_at) = last_seen_at else {
+        return 0;
+    };
     duration_between(started_at, last_seen_at).min(MAX_RECOVERY_SECONDS)
 }
 
-fn open_db(path: &Path) -> Result<Connection, String> { db::open(path) }
+fn open_db(path: &Path) -> Result<Connection, String> {
+    db::open(path)
+}
 
-fn create_session(db_path: &Path, installation: &Installation, process: &TrackedProcess) -> Result<String, String> {
+fn create_session(
+    db_path: &Path,
+    installation: &Installation,
+    process: &TrackedProcess,
+) -> Result<String, String> {
     let connection = open_db(db_path)?;
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -49,24 +70,42 @@ fn heartbeat(db_path: &Path, session_id: &str, process: &TrackedProcess) -> Resu
 
 fn finish_session(db_path: &Path, session_id: &str) -> Result<(), String> {
     let connection = open_db(db_path)?;
-    let started_at: String = connection.query_row("SELECT started_at FROM play_sessions WHERE id=?1", [session_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+    let started_at: String = connection
+        .query_row(
+            "SELECT started_at FROM play_sessions WHERE id=?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     let ended_at = Utc::now().to_rfc3339();
     let duration = duration_between(&started_at, &ended_at);
     connection.execute(
         "UPDATE play_sessions SET ended_at=?1, last_seen_at=?1, duration_seconds=?2 WHERE id=?3 AND ended_at IS NULL",
         params![ended_at, duration, session_id],
     ).map_err(|e| e.to_string())?;
-    info!(session_id, duration_seconds=duration, "Sessão encerrada");
+    info!(session_id, duration_seconds = duration, "Sessão encerrada");
     Ok(())
 }
 
 fn install_directory(installation: &Installation) -> Option<PathBuf> {
-    installation.install_dir.as_ref().map(PathBuf::from).or_else(|| {
-        installation.executable.as_ref().and_then(|exe| Path::new(exe).parent().map(Path::to_path_buf))
-    })
+    installation
+        .install_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            installation
+                .executable
+                .as_ref()
+                .and_then(|exe| Path::new(exe).parent().map(Path::to_path_buf))
+        })
 }
 
-pub fn spawn_for_launch(db_path: PathBuf, installation: Installation, baseline: HashSet<u32>, direct_pid: Option<u32>) {
+pub fn spawn_for_launch(
+    db_path: PathBuf,
+    installation: Installation,
+    baseline: HashSet<u32>,
+    direct_pid: Option<u32>,
+) {
     thread::spawn(move || {
         let Some(directory) = install_directory(&installation) else {
             warn!(installation_id=%installation.id, "Não foi possível determinar diretório para monitorar");
@@ -78,7 +117,10 @@ pub fn spawn_for_launch(db_path: PathBuf, installation: Installation, baseline: 
             let mut confirmed = None;
             for _ in 0..10 {
                 if ProcessMonitor::process_matches(pid, &executable) {
-                    confirmed = Some(TrackedProcess { pid, executable: executable.clone() });
+                    confirmed = Some(TrackedProcess {
+                        pid,
+                        executable: executable.clone(),
+                    });
                     break;
                 }
                 thread::sleep(Duration::from_millis(250));
@@ -87,7 +129,9 @@ pub fn spawn_for_launch(db_path: PathBuf, installation: Installation, baseline: 
         } else {
             let mut found = None;
             for _ in 0..DETECTION_ATTEMPTS {
-                if let Some(process) = ProcessMonitor::find_new_process_in_dir(&directory, &baseline) {
+                if let Some(process) =
+                    ProcessMonitor::find_new_process_in_dir(&directory, &baseline)
+                {
                     found = Some(process);
                     break;
                 }
@@ -101,7 +145,9 @@ pub fn spawn_for_launch(db_path: PathBuf, installation: Installation, baseline: 
             return;
         };
 
-        let Ok(session_id) = create_session(&db_path, &installation, &process) else { return; };
+        let Ok(session_id) = create_session(&db_path, &installation, &process) else {
+            return;
+        };
         let mut misses = 0u8;
         loop {
             thread::sleep(HEARTBEAT_INTERVAL);
@@ -125,11 +171,20 @@ pub fn recover_incomplete_sessions(db_path: PathBuf) -> Result<(), String> {
     let mut statement = connection.prepare(
         "SELECT id, started_at, last_seen_at, process_id, process_path FROM play_sessions WHERE ended_at IS NULL"
     ).map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| Ok((
-        row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?,
-        row.get::<_, Option<i64>>(3)?, row.get::<_, Option<String>>(4)?
-    ))).map_err(|e| e.to_string())?;
-    let sessions = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let sessions = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     drop(statement);
     drop(connection);
 
@@ -142,7 +197,10 @@ pub fn recover_incomplete_sessions(db_path: PathBuf) -> Result<(), String> {
                     loop {
                         thread::sleep(HEARTBEAT_INTERVAL);
                         if ProcessMonitor::process_matches(pid, &path) {
-                            let tracked = TrackedProcess { pid, executable: path.clone() };
+                            let tracked = TrackedProcess {
+                                pid,
+                                executable: path.clone(),
+                            };
                             let _ = heartbeat(&path_clone, &id, &tracked);
                         } else {
                             let _ = finish_session(&path_clone, &id);
@@ -172,17 +230,29 @@ mod tests {
 
     #[test]
     fn calculates_session_duration() {
-        assert_eq!(duration_between("2026-08-28T10:00:00+00:00", "2026-08-28T11:30:05+00:00"), 5405);
+        assert_eq!(
+            duration_between("2026-08-28T10:00:00+00:00", "2026-08-28T11:30:05+00:00"),
+            5405
+        );
     }
 
     #[test]
     fn rejects_negative_duration() {
-        assert_eq!(duration_between("2026-08-28T12:00:00+00:00", "2026-08-28T11:00:00+00:00"), 0);
+        assert_eq!(
+            duration_between("2026-08-28T12:00:00+00:00", "2026-08-28T11:00:00+00:00"),
+            0
+        );
     }
 
     #[test]
     fn incomplete_session_uses_last_heartbeat_and_caps_corruption() {
-        assert_eq!(safe_recovery_duration("2026-08-01T00:00:00+00:00", Some("2026-08-28T00:00:00+00:00")), 18 * 60 * 60);
+        assert_eq!(
+            safe_recovery_duration(
+                "2026-08-01T00:00:00+00:00",
+                Some("2026-08-28T00:00:00+00:00")
+            ),
+            18 * 60 * 60
+        );
         assert_eq!(safe_recovery_duration("2026-08-28T10:00:00+00:00", None), 0);
     }
 }

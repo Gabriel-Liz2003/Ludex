@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::{Path, PathBuf}};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{models::ScannedInstallation, providers::LibraryProvider};
 use tracing::{debug, info, warn};
@@ -9,7 +13,9 @@ impl SteamProvider {
     pub fn detect_root() -> Option<PathBuf> {
         let mut roots = Self::registry_roots();
         roots.extend(Self::candidate_roots());
-        roots.into_iter().find(|root| root.join("steam.exe").exists())
+        roots
+            .into_iter()
+            .find(|root| root.join("steam.exe").exists())
     }
 
     fn candidate_roots() -> Vec<PathBuf> {
@@ -28,7 +34,10 @@ impl SteamProvider {
 
     #[cfg(windows)]
     fn registry_roots() -> Vec<PathBuf> {
-        use winreg::{enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}, RegKey};
+        use winreg::{
+            enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
+            RegKey,
+        };
 
         let mut roots = Vec::new();
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -39,7 +48,10 @@ impl SteamProvider {
         }
 
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        for key_path in ["SOFTWARE\\WOW6432Node\\Valve\\Steam", "SOFTWARE\\Valve\\Steam"] {
+        for key_path in [
+            "SOFTWARE\\WOW6432Node\\Valve\\Steam",
+            "SOFTWARE\\Valve\\Steam",
+        ] {
             if let Ok(key) = hklm.open_subkey(key_path) {
                 if let Ok(path) = key.get_value::<String, _>("InstallPath") {
                     roots.push(PathBuf::from(path));
@@ -94,8 +106,12 @@ impl SteamProvider {
                     .and_then(|content| parse_appmanifest(&content, &library))
                 {
                     Ok(Some(game)) => games.push(game),
-                    Ok(None) => debug!(provider = "steam", manifest = %path.display(), "Manifest ignorado por não representar jogo normal"),
-                    Err(error) => warn!(provider = "steam", manifest = %path.display(), %error, "Manifest Steam inválido"),
+                    Ok(None) => {
+                        debug!(provider = "steam", manifest = %path.display(), "Manifest ignorado por não representar jogo normal")
+                    }
+                    Err(error) => {
+                        warn!(provider = "steam", manifest = %path.display(), %error, "Manifest Steam inválido")
+                    }
                 }
             }
         }
@@ -105,9 +121,15 @@ impl SteamProvider {
 }
 
 impl LibraryProvider for SteamProvider {
-    fn id(&self) -> &'static str { "steam" }
-    fn display_name(&self) -> &'static str { "Steam" }
-    fn is_available(&self) -> bool { Self::detect_root().is_some() }
+    fn id(&self) -> &'static str {
+        "steam"
+    }
+    fn display_name(&self) -> &'static str {
+        "Steam"
+    }
+    fn is_available(&self) -> bool {
+        Self::detect_root().is_some()
+    }
     fn scan(&self) -> Result<Vec<ScannedInstallation>, String> {
         let root = Self::detect_root().ok_or_else(|| "Steam não encontrada".to_string())?;
         Self::scan_from_root(&root)
@@ -153,7 +175,10 @@ pub fn parse_libraryfolders(content: &str) -> Vec<PathBuf> {
         }
         let key = fields[0].trim();
         let value = fields[1].replace("\\\\", "\\");
-        if key.eq_ignore_ascii_case("path") || (key.chars().all(|c| c.is_ascii_digit()) && (value.contains(':') || value.starts_with('/'))) {
+        if key.eq_ignore_ascii_case("path")
+            || (key.chars().all(|c| c.is_ascii_digit())
+                && (value.contains(':') || value.starts_with('/')))
+        {
             paths.push(PathBuf::from(value));
         }
     }
@@ -172,7 +197,12 @@ fn value_for(content: &str, wanted: &str) -> Option<String> {
 }
 
 fn is_non_game(name: &str, app_type: Option<&str>) -> bool {
-    if app_type.is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "tool" | "config" | "demo" | "dlc")) {
+    if app_type.is_some_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "tool" | "config" | "demo" | "dlc"
+        )
+    }) {
         return true;
     }
     let lower = name.to_ascii_lowercase();
@@ -183,14 +213,22 @@ fn is_non_game(name: &str, app_type: Option<&str>) -> bool {
         "redistributable",
         "runtime",
         "sdk",
-    ].iter().any(|needle| lower.contains(needle))
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
-pub fn parse_appmanifest(content: &str, library: &Path) -> Result<Option<ScannedInstallation>, String> {
+pub fn parse_appmanifest(
+    content: &str,
+    library: &Path,
+) -> Result<Option<ScannedInstallation>, String> {
     let appid = value_for(content, "appid").ok_or_else(|| "appid ausente".to_string())?;
     let name = value_for(content, "name").ok_or_else(|| "name ausente".to_string())?;
-    let installdir = value_for(content, "installdir").ok_or_else(|| "installdir ausente".to_string())?;
-    let state_flags = value_for(content, "StateFlags").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let installdir =
+        value_for(content, "installdir").ok_or_else(|| "installdir ausente".to_string())?;
+    let state_flags = value_for(content, "StateFlags")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     let size_bytes = value_for(content, "SizeOnDisk").and_then(|v| v.parse::<i64>().ok());
     let last_updated = value_for(content, "LastUpdated").and_then(|v| v.parse::<i64>().ok());
     let app_type = value_for(content, "AppType");
@@ -219,8 +257,8 @@ pub fn parse_appmanifest(content: &str, library: &Path) -> Result<Option<Scanned
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use super::{parse_appmanifest, parse_libraryfolders};
+    use std::path::Path;
 
     #[test]
     fn parses_modern_libraryfolders_fixture() {
@@ -233,7 +271,9 @@ mod tests {
     #[test]
     fn parses_appmanifest_fixture() {
         let content = include_str!("../../tests/fixtures/appmanifest_1091500.acf");
-        let game = parse_appmanifest(content, Path::new("C:\\SteamLibrary")).unwrap().unwrap();
+        let game = parse_appmanifest(content, Path::new("C:\\SteamLibrary"))
+            .unwrap()
+            .unwrap();
         assert_eq!(game.external_id, "1091500");
         assert_eq!(game.title, "Cyberpunk 2077™");
         assert_eq!(game.size_bytes, Some(74239123456));
@@ -248,6 +288,8 @@ mod tests {
     "StateFlags" "4"
     "installdir" "Steamworks Shared"
 }"#;
-        assert!(parse_appmanifest(content, Path::new("C:\\SteamLibrary")).unwrap().is_none());
+        assert!(parse_appmanifest(content, Path::new("C:\\SteamLibrary"))
+            .unwrap()
+            .is_none());
     }
 }

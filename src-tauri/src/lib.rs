@@ -26,7 +26,10 @@ fn list_games(state: tauri::State<'_, AppState>) -> Result<Vec<Game>, String> {
 }
 
 #[tauri::command]
-fn get_game_details(state: tauri::State<'_, AppState>, game_id: String) -> Result<Option<GameDetails>, String> {
+fn get_game_details(
+    state: tauri::State<'_, AppState>,
+    game_id: String,
+) -> Result<Option<GameDetails>, String> {
     let connection = db::open(&state.db_path)?;
     db::get_game_details(&connection, &game_id)
 }
@@ -65,7 +68,13 @@ async fn steam_status(state: tauri::State<'_, AppState>) -> Result<SteamStatus, 
         let connection = db::open(&db_path)?;
         let last_sync = db::get_setting(&connection, "steam.last_sync")?;
         let Some(root) = SteamProvider::detect_root() else {
-            return Ok(SteamStatus { detected: false, root_path: None, library_count: 0, games_found: 0, last_sync });
+            return Ok(SteamStatus {
+                detected: false,
+                root_path: None,
+                library_count: 0,
+                games_found: 0,
+                last_sync,
+            });
         };
         let libraries = SteamProvider::library_paths(&root)?;
         let games_found = SteamProvider::scan_from_root(&root)?.len();
@@ -76,21 +85,37 @@ async fn steam_status(state: tauri::State<'_, AppState>) -> Result<SteamStatus, 
             games_found,
             last_sync,
         })
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn sync_steam(state: tauri::State<'_, AppState>) -> Result<SteamImportResult, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let root = SteamProvider::detect_root().ok_or_else(|| "Steam não encontrada neste computador".to_string())?;
+        let root = SteamProvider::detect_root()
+            .ok_or_else(|| "Steam não encontrada neste computador".to_string())?;
         let libraries = SteamProvider::library_paths(&root)?;
         let installations = SteamProvider::scan_from_root(&root)?;
         let connection = db::open(&db_path)?;
-        let result = db::import_installations(&connection, "steam", &installations, &root.to_string_lossy(), libraries.len())?;
-        info!(games_found=result.games_found, created=result.games_created, deduplicated=result.deduplicated, "Importação Steam concluída");
+        let result = db::import_installations(
+            &connection,
+            "steam",
+            &installations,
+            &root.to_string_lossy(),
+            libraries.len(),
+        )?;
+        info!(
+            games_found = result.games_found,
+            created = result.games_created,
+            deduplicated = result.deduplicated,
+            "Importação Steam concluída"
+        );
         Ok(result)
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(windows)]
@@ -106,7 +131,10 @@ fn launch_steam(app_id: &str) -> Result<(), String> {
 #[cfg(not(windows))]
 fn launch_steam(app_id: &str) -> Result<(), String> {
     let uri = format!("steam://rungameid/{app_id}");
-    Command::new("xdg-open").arg(uri).spawn().map_err(|e| e.to_string())?;
+    Command::new("xdg-open")
+        .arg(uri)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -114,7 +142,11 @@ fn launch_steam(app_id: &str) -> Result<(), String> {
 fn launch_game(state: tauri::State<'_, AppState>, game_id: String) -> Result<LaunchResult, String> {
     let connection = db::open(&state.db_path)?;
     if db::active_session_exists(&connection, &game_id)? {
-        return Ok(LaunchResult { launched: false, already_running: true, message: "O Ludex já está acompanhando uma sessão deste jogo.".into() });
+        return Ok(LaunchResult {
+            launched: false,
+            already_running: true,
+            message: "O Ludex já está acompanhando uma sessão deste jogo.".into(),
+        });
     }
     let installation = db::installation_for_launch(&connection, &game_id)?
         .ok_or_else(|| "Nenhuma instalação jogável foi encontrada para este jogo".to_string())?;
@@ -123,28 +155,48 @@ fn launch_game(state: tauri::State<'_, AppState>, game_id: String) -> Result<Lau
     let baseline = ProcessMonitor::snapshot_pids();
     let direct_pid = match installation.provider.as_str() {
         "steam" => {
-            let app_id = installation.external_id.as_deref().ok_or_else(|| "Steam AppID ausente".to_string())?;
+            let app_id = installation
+                .external_id
+                .as_deref()
+                .ok_or_else(|| "Steam AppID ausente".to_string())?;
             launch_steam(app_id)?;
             None
         }
         "manual" => {
-            let executable = installation.executable.as_deref().ok_or_else(|| "Executável não configurado".to_string())?;
+            let executable = installation
+                .executable
+                .as_deref()
+                .ok_or_else(|| "Executável não configurado".to_string())?;
             let mut command = Command::new(executable);
             if let Some(directory) = installation.working_dir.as_deref() {
                 command.current_dir(directory);
             }
             if let Some(arguments) = installation.launch_args.as_deref() {
-                let args = shlex::split(arguments).ok_or_else(|| "Argumentos de inicialização inválidos".to_string())?;
+                let args = shlex::split(arguments)
+                    .ok_or_else(|| "Argumentos de inicialização inválidos".to_string())?;
                 command.args(args);
             }
-            Some(command.spawn().map_err(|e| format!("Falha ao iniciar o jogo: {e}"))?.id())
+            Some(
+                command
+                    .spawn()
+                    .map_err(|e| format!("Falha ao iniciar o jogo: {e}"))?
+                    .id(),
+            )
         }
-        provider => return Err(format!("O provider '{provider}' ainda não possui launcher implementado")),
+        provider => {
+            return Err(format!(
+                "O provider '{provider}' ainda não possui launcher implementado"
+            ))
+        }
     };
 
     info!(game_id=%game_id, provider=%installation.provider, "Launch solicitado");
     sessions::spawn_for_launch(state.db_path.clone(), installation, baseline, direct_pid);
-    Ok(LaunchResult { launched: true, already_running: false, message: "Jogo iniciado. A sessão começará quando o processo real for confirmado.".into() })
+    Ok(LaunchResult {
+        launched: true,
+        already_running: false,
+        message: "Jogo iniciado. A sessão começará quando o processo real for confirmado.".into(),
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

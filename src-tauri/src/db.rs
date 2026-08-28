@@ -4,7 +4,13 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
-use crate::{identity::normalize_title, models::{Game, GameDetails, GameStats, Installation, PlaySession, ScannedInstallation, SteamImportResult}};
+use crate::{
+    identity::normalize_title,
+    models::{
+        Game, GameDetails, GameStats, Installation, PlaySession, ScannedInstallation,
+        SteamImportResult,
+    },
+};
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -106,8 +112,12 @@ pub fn open(path: &Path) -> Result<Connection, String> {
 }
 
 fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool, String> {
-    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).map_err(|e| e.to_string())?;
-    let names = statement.query_map([], |row| row.get::<_, String>(1)).map_err(|e| e.to_string())?;
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| e.to_string())?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?;
     for name in names {
         if name.map_err(|e| e.to_string())? == column {
             return Ok(true);
@@ -116,16 +126,29 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<b
     Ok(false)
 }
 
-fn ensure_column(connection: &Connection, table: &str, column: &str, definition: &str) -> Result<(), String> {
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
     if !column_exists(connection, table, column)? {
-        connection.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition};"))
+        connection
+            .execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+            ))
             .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 fn migrate_existing(connection: &Connection) -> Result<(), String> {
-    ensure_column(connection, "games", "normalized_title", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(
+        connection,
+        "games",
+        "normalized_title",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     for (name, definition) in [
         ("provider", "TEXT NOT NULL DEFAULT 'manual'"),
         ("external_id", "TEXT"),
@@ -134,15 +157,22 @@ fn migrate_existing(connection: &Connection) -> Result<(), String> {
         ("size_bytes", "INTEGER"),
         ("last_updated", "INTEGER"),
         ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
-    ] { ensure_column(connection, "installations", name, definition)?; }
+    ] {
+        ensure_column(connection, "installations", name, definition)?;
+    }
     for (name, definition) in [
-        ("installation_id", "TEXT REFERENCES installations(id) ON DELETE SET NULL"),
+        (
+            "installation_id",
+            "TEXT REFERENCES installations(id) ON DELETE SET NULL",
+        ),
         ("provider", "TEXT"),
         ("process_id", "INTEGER"),
         ("process_path", "TEXT"),
         ("last_seen_at", "TEXT"),
         ("recovered", "INTEGER NOT NULL DEFAULT 0"),
-    ] { ensure_column(connection, "play_sessions", name, definition)?; }
+    ] {
+        ensure_column(connection, "play_sessions", name, definition)?;
+    }
 
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_games_normalized_title ON games(normalized_title);
@@ -163,13 +193,26 @@ fn migrate_existing(connection: &Connection) -> Result<(), String> {
 }
 
 fn backfill_normalized_titles(connection: &Connection) -> Result<(), String> {
-    let mut statement = connection.prepare("SELECT id, title FROM games WHERE normalized_title = ''").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+    let mut statement = connection
+        .prepare("SELECT id, title FROM games WHERE normalized_title = ''")
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
     let mut updates = Vec::new();
-    for row in rows { updates.push(row.map_err(|e| e.to_string())?); }
+    for row in rows {
+        updates.push(row.map_err(|e| e.to_string())?);
+    }
     drop(statement);
     for (id, title) in updates {
-        connection.execute("UPDATE games SET normalized_title=?1 WHERE id=?2", params![normalize_title(&title), id]).map_err(|e| e.to_string())?;
+        connection
+            .execute(
+                "UPDATE games SET normalized_title=?1 WHERE id=?2",
+                params![normalize_title(&title), id],
+            )
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -186,7 +229,11 @@ fn row_to_game(row: &rusqlite::Row<'_>) -> rusqlite::Result<Game> {
         status: row.get(6)?,
         total_seconds: row.get(7)?,
         installed: row.get::<_, i64>(8)? != 0,
-        providers: providers.split(',').filter(|v| !v.is_empty()).map(str::to_string).collect(),
+        providers: providers
+            .split(',')
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .collect(),
         active: row.get::<_, i64>(10)? != 0,
         last_played_at: row.get(11)?,
         session_count: row.get(12)?,
@@ -208,11 +255,22 @@ FROM games g";
 pub fn list_games(connection: &Connection) -> Result<Vec<Game>, String> {
     let sql = format!("{GAME_SELECT} ORDER BY g.favorite DESC, g.title COLLATE NOCASE");
     let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], row_to_game).map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    let rows = statement
+        .query_map([], row_to_game)
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
-pub fn add_manual_game(connection: &Connection, id: &str, title: &str, platform: &str, executable: Option<&str>, working_dir: Option<&str>, launch_args: Option<&str>) -> Result<(), String> {
+pub fn add_manual_game(
+    connection: &Connection,
+    id: &str,
+    title: &str,
+    platform: &str,
+    executable: Option<&str>,
+    working_dir: Option<&str>,
+    launch_args: Option<&str>,
+) -> Result<(), String> {
     let normalized = normalize_title(title);
     connection.execute(
         "INSERT INTO games (id, title, normalized_title, platform, source, executable) VALUES (?1, ?2, ?3, ?4, 'manual', ?5)",
@@ -227,30 +285,64 @@ pub fn add_manual_game(connection: &Connection, id: &str, title: &str, platform:
     Ok(())
 }
 
-fn matching_game(connection: &Connection, provider: &str, external_id: &str, title: &str) -> Result<(Option<String>, bool), String> {
-    if let Some(id) = connection.query_row(
-        "SELECT game_id FROM external_ids WHERE provider=?1 AND external_id=?2",
-        params![provider, external_id], |row| row.get(0)
-    ).optional().map_err(|e| e.to_string())? {
+fn matching_game(
+    connection: &Connection,
+    provider: &str,
+    external_id: &str,
+    title: &str,
+) -> Result<(Option<String>, bool), String> {
+    if let Some(id) = connection
+        .query_row(
+            "SELECT game_id FROM external_ids WHERE provider=?1 AND external_id=?2",
+            params![provider, external_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+    {
         return Ok((Some(id), true));
     }
 
     let normalized = normalize_title(title);
-    let mut statement = connection.prepare("SELECT id FROM games WHERE normalized_title=?1 LIMIT 2").map_err(|e| e.to_string())?;
-    let rows = statement.query_map([normalized], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
-    let matches = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
-    if matches.len() == 1 { Ok((Some(matches[0].clone()), true)) } else { Ok((None, false)) }
+    let mut statement = connection
+        .prepare("SELECT id FROM games WHERE normalized_title=?1 LIMIT 2")
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([normalized], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let matches = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if matches.len() == 1 {
+        Ok((Some(matches[0].clone()), true))
+    } else {
+        Ok((None, false))
+    }
 }
 
-pub fn import_installations(connection: &Connection, provider: &str, installations: &[ScannedInstallation], root_path: &str, library_count: usize) -> Result<SteamImportResult, String> {
-    connection.execute("UPDATE installations SET installed=0 WHERE provider=?1", [provider]).map_err(|e| e.to_string())?;
+pub fn import_installations(
+    connection: &Connection,
+    provider: &str,
+    installations: &[ScannedInstallation],
+    root_path: &str,
+    library_count: usize,
+) -> Result<SteamImportResult, String> {
+    connection
+        .execute(
+            "UPDATE installations SET installed=0 WHERE provider=?1",
+            [provider],
+        )
+        .map_err(|e| e.to_string())?;
     let mut created = 0usize;
     let mut deduplicated = 0usize;
 
     for item in installations {
-        let (existing, matched) = matching_game(connection, provider, &item.external_id, &item.title)?;
+        let (existing, matched) =
+            matching_game(connection, provider, &item.external_id, &item.title)?;
         let game_id = if let Some(id) = existing {
-            if matched { deduplicated += 1; }
+            if matched {
+                deduplicated += 1;
+            }
             id
         } else {
             created += 1;
@@ -262,11 +354,13 @@ pub fn import_installations(connection: &Connection, provider: &str, installatio
             id
         };
 
-        connection.execute(
-            "INSERT INTO external_ids(game_id, provider, external_id) VALUES (?1, ?2, ?3)
+        connection
+            .execute(
+                "INSERT INTO external_ids(game_id, provider, external_id) VALUES (?1, ?2, ?3)
              ON CONFLICT(provider, external_id) DO UPDATE SET game_id=excluded.game_id",
-            params![game_id, provider, item.external_id],
-        ).map_err(|e| e.to_string())?;
+                params![game_id, provider, item.external_id],
+            )
+            .map_err(|e| e.to_string())?;
 
         let installation_id = format!("{provider}:{}", item.external_id);
         connection.execute(
@@ -296,10 +390,18 @@ pub fn import_installations(connection: &Connection, provider: &str, installatio
 }
 
 pub fn get_setting(connection: &Connection, key: &str) -> Result<Option<String>, String> {
-    connection.query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0)).optional().map_err(|e| e.to_string())
+    connection
+        .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())
 }
 
-pub fn installation_for_launch(connection: &Connection, game_id: &str) -> Result<Option<Installation>, String> {
+pub fn installation_for_launch(
+    connection: &Connection,
+    game_id: &str,
+) -> Result<Option<Installation>, String> {
     connection.query_row(
         "SELECT id, game_id, provider, external_id, executable, install_dir, working_dir, launch_args, installed
          FROM installations WHERE game_id=?1 AND installed=1 ORDER BY CASE provider WHEN 'steam' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END LIMIT 1",
@@ -312,14 +414,28 @@ pub fn installation_for_launch(connection: &Connection, game_id: &str) -> Result
 }
 
 pub fn active_session_exists(connection: &Connection, game_id: &str) -> Result<bool, String> {
-    connection.query_row("SELECT EXISTS(SELECT 1 FROM play_sessions WHERE game_id=?1 AND ended_at IS NULL)", [game_id], |row| row.get::<_, i64>(0))
-        .map(|value| value != 0).map_err(|e| e.to_string())
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM play_sessions WHERE game_id=?1 AND ended_at IS NULL)",
+            [game_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .map_err(|e| e.to_string())
 }
 
-pub fn get_game_details(connection: &Connection, game_id: &str) -> Result<Option<GameDetails>, String> {
+pub fn get_game_details(
+    connection: &Connection,
+    game_id: &str,
+) -> Result<Option<GameDetails>, String> {
     let sql = format!("{GAME_SELECT} WHERE g.id=?1");
-    let game = connection.query_row(&sql, [game_id], row_to_game).optional().map_err(|e| e.to_string())?;
-    let Some(game) = game else { return Ok(None); };
+    let game = connection
+        .query_row(&sql, [game_id], row_to_game)
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(game) = game else {
+        return Ok(None);
+    };
 
     let stats = connection.query_row(
         "SELECT COALESCE(SUM(CASE WHEN ended_at IS NOT NULL THEN duration_seconds ELSE 0 END),0),
@@ -339,19 +455,52 @@ pub fn get_game_details(connection: &Connection, game_id: &str) -> Result<Option
     let mut installation_stmt = connection.prepare(
         "SELECT id, game_id, provider, external_id, executable, install_dir, working_dir, launch_args, installed FROM installations WHERE game_id=?1 ORDER BY installed DESC, provider"
     ).map_err(|e| e.to_string())?;
-    let installations = installation_stmt.query_map([game_id], |row| Ok(Installation {
-        id: row.get(0)?, game_id: row.get(1)?, provider: row.get(2)?, external_id: row.get(3)?, executable: row.get(4)?,
-        install_dir: row.get(5)?, working_dir: row.get(6)?, launch_args: row.get(7)?, installed: row.get::<_, i64>(8)? != 0,
-    })).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    let installations = installation_stmt
+        .query_map([game_id], |row| {
+            Ok(Installation {
+                id: row.get(0)?,
+                game_id: row.get(1)?,
+                provider: row.get(2)?,
+                external_id: row.get(3)?,
+                executable: row.get(4)?,
+                install_dir: row.get(5)?,
+                working_dir: row.get(6)?,
+                launch_args: row.get(7)?,
+                installed: row.get::<_, i64>(8)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
 
     let mut session_stmt = connection.prepare(
         "SELECT id, game_id, installation_id, started_at, ended_at, duration_seconds, device, provider, process_id, process_path, recovered
          FROM play_sessions WHERE game_id=?1 ORDER BY started_at DESC LIMIT 8"
     ).map_err(|e| e.to_string())?;
-    let recent_sessions = session_stmt.query_map([game_id], |row| Ok(PlaySession {
-        id: row.get(0)?, game_id: row.get(1)?, installation_id: row.get(2)?, started_at: row.get(3)?, ended_at: row.get(4)?, duration_seconds: row.get(5)?,
-        device: row.get(6)?, provider: row.get(7)?, process_id: row.get::<_, Option<i64>>(8)?.map(|v| v as u32), process_path: row.get(9)?, recovered: row.get::<_, i64>(10)? != 0,
-    })).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    let recent_sessions = session_stmt
+        .query_map([game_id], |row| {
+            Ok(PlaySession {
+                id: row.get(0)?,
+                game_id: row.get(1)?,
+                installation_id: row.get(2)?,
+                started_at: row.get(3)?,
+                ended_at: row.get(4)?,
+                duration_seconds: row.get(5)?,
+                device: row.get(6)?,
+                provider: row.get(7)?,
+                process_id: row.get::<_, Option<i64>>(8)?.map(|v| v as u32),
+                process_path: row.get(9)?,
+                recovered: row.get::<_, i64>(10)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
 
-    Ok(Some(GameDetails { game, stats, installations, recent_sessions }))
+    Ok(Some(GameDetails {
+        game,
+        stats,
+        installations,
+        recent_sessions,
+    }))
 }

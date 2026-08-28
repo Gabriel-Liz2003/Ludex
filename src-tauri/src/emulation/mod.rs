@@ -1,5 +1,5 @@
-use std::path::Path;
 use crate::models::EmulatorConfig;
+use std::path::Path;
 
 pub trait EmulatorAdapter: Send + Sync {
     fn config(&self) -> &EmulatorConfig;
@@ -8,7 +8,12 @@ pub trait EmulatorAdapter: Send + Sync {
 }
 
 pub fn render_arguments(template: &str, rom: &Path) -> Result<Vec<String>, String> {
-    let rom = rom.to_str().ok_or_else(|| "Caminho de ROM inválido".to_string())?;
+    let rom = rom
+        .to_str()
+        .ok_or_else(|| "Caminho de ROM inválido".to_string())?;
     let rendered = template.replace("{rom}", rom);
-    Ok(rendered.split_whitespace().map(ToString::to_string).collect())
+    Ok(rendered
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect())
 }
