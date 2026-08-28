@@ -112,3 +112,19 @@ pub struct BackupEnvelope {
     pub exported_at: String,
     pub data: serde_json::Value,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveBackupRecord {
+    pub id: String,
+    pub emulator_id: Option<String>,
+    pub source_path: String,
+    pub backup_path: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionMembership {
+    pub id: String,
+    pub name: String,
+    pub included: bool,
+}
