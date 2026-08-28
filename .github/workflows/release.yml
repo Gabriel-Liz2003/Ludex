@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - id: existing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v${{ steps.version.outputs.version }}" *> $null
+          if ($LASTEXITCODE -eq 0) { "exists=true" >> $env:GITHUB_OUTPUT } else { "exists=false" >> $env:GITHUB_OUTPUT }
+      - if: steps.existing.outputs.exists != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: steps.existing.outputs.exists != 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.existing.outputs.exists != 'true'
+        run: npm install
+      - if: steps.existing.outputs.exists != 'true'
+        run: npm run tauri -- build --bundles nsis
+      - if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*setup.exe | Select-Object -First 1
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Set-Content "$($exe.FullName).sha256" -Encoding ascii
+      - if: steps.existing.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Ludex v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*setup.exe
+            src-tauri/target/release/bundle/nsis/*setup.exe.sha256
