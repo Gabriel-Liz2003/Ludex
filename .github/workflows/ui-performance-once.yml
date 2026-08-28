@@ -1,10 +1,33 @@
-name: ui-performance-helper-disabled
+name: frontend-repair-once
 
 on:
-  workflow_dispatch:
+  push:
+    branches: ["feat/ludex-foundation"]
+
+permissions:
+  contents: write
 
 jobs:
-  completed:
+  repair:
+    if: ${{ !contains(github.event.head_commit.message, '[frontend-fix]') }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "UI performance helper is disabled; an earlier queued run may still apply the versioned patch."
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ludex-foundation
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: python scripts/finalize-ui-performance.py
+      - run: npm install
+      - run: npm run build
+      - run: |
+          if git diff --quiet -- src/main.ts; then
+            echo "No frontend repair needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.ts
+          git commit -m "fix: repair artwork lazy-loading syntax [frontend-fix]"
+          git push origin HEAD:feat/ludex-foundation
