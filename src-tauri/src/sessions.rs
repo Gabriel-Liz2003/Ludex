@@ -717,8 +717,12 @@ pub fn recover_incomplete_sessions(db_path: PathBuf) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{duration_between, has_legitimate_game_process, safe_recovery_duration};
-    use crate::process_monitor::ProcessInfo;
+    use super::{
+        create_session, duration_between, has_legitimate_game_process, safe_recovery_duration,
+    };
+    use crate::{db, process_monitor::ProcessInfo};
+    use std::fs;
+    use uuid::Uuid;
 
     fn process(name: &str, pid: u32) -> ProcessInfo {
         ProcessInfo {
@@ -779,5 +783,59 @@ mod tests {
             "EasyAntiCheat.exe",
             3
         )]));
+    }
+
+    #[test]
+    fn duplicate_active_session_for_installation_is_rejected() {
+        let path = std::env::temp_dir().join(format!("ludex-session-test-{}.db", Uuid::new_v4()));
+        let connection = db::open(&path).unwrap();
+        db::add_manual_game(
+            &connection,
+            "session-test-game",
+            "Session Test Game",
+            "PC",
+            Some("D:\\Game\\game.exe"),
+            Some("D:\\Game"),
+            None,
+        )
+        .unwrap();
+        let installation = db::installation_for_launch(&connection, "session-test-game")
+            .unwrap()
+            .unwrap();
+        drop(connection);
+
+        let candidate = process("game.exe", 42);
+        let first = create_session(
+            &path,
+            &installation,
+            &candidate,
+            "external_detection",
+            "2026-08-28T12:00:00+00:00",
+            "test candidate",
+        )
+        .unwrap();
+        let second = create_session(
+            &path,
+            &installation,
+            &candidate,
+            "ludex_launch",
+            "2026-08-28T12:00:01+00:00",
+            "duplicate candidate",
+        )
+        .unwrap();
+
+        assert!(first.is_some());
+        assert!(second.is_none());
+        let connection = db::open(&path).unwrap();
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM play_sessions WHERE installation_id=?1 AND ended_at IS NULL",
+                [&installation.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(connection);
+        let _ = fs::remove_file(path);
     }
 }

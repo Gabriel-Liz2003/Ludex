@@ -556,6 +556,7 @@ mod tests {
         let candidate = ProcessCandidateScorer::score(&snap, snap.get(42).unwrap(), &context);
         assert_eq!(candidate.role, ProcessRole::Game);
         assert!(candidate.score >= LAUNCH_SCORE_THRESHOLD);
+        assert!(candidate.score >= EXTERNAL_SCORE_THRESHOLD);
     }
 
     #[test]
