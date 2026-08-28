@@ -98,7 +98,7 @@ fn is_apps_path(stack: &[String]) -> Option<&str> {
 pub fn parse_local_playtime(content: &str) -> HashMap<String, i64> {
     let tokens = tokenize_vdf(content);
     let mut stack: Vec<String> = Vec::new();
-    let mut values = HashMap::new();
+    let mut values: HashMap<String, i64> = HashMap::new();
     let mut i = 0usize;
     while i < tokens.len() {
         match &tokens[i] {
