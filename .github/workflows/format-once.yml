@@ -1,0 +1,33 @@
+name: format-once
+
+on:
+  push:
+    branches: ["feat/ludex-foundation"]
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    if: ${{ !contains(github.event.head_commit.message, '[rustfmt]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ludex-foundation
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Commit rustfmt output
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri
+          git commit -m "style: apply cargo fmt [rustfmt]"
+          git push origin HEAD:feat/ludex-foundation
