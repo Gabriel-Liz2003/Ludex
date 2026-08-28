@@ -24,6 +24,11 @@ jobs:
           components: rustfmt
       - run: python scripts/apply-steam-artwork-playtime-updater.py
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Keep workflow files unchanged in generated commit
+        shell: bash
+        run: |
+          git checkout HEAD -- .github/workflows/steam-artwork-playtime-updater-once.yml
+          rm -f .github/workflows/release.yml
       - name: Commit generated increment
         shell: bash
         run: |
