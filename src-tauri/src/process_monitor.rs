@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sysinfo::{Pid, System};
+use sysinfo::System;
 
 pub const LAUNCH_SCORE_THRESHOLD: i32 = 70;
 pub const EXTERNAL_SCORE_THRESHOLD: i32 = 85;

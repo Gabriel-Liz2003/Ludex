@@ -16,7 +16,7 @@ use crate::{
     models::Installation,
     process_monitor::{
         classify_process, CandidateContext, ProcessInfo, ProcessMonitor, ProcessRole,
-        TrackedProcess, EXTERNAL_SCORE_THRESHOLD, LAUNCH_SCORE_THRESHOLD,
+        EXTERNAL_SCORE_THRESHOLD, LAUNCH_SCORE_THRESHOLD,
     },
 };
 
@@ -650,8 +650,9 @@ pub fn recover_incomplete_sessions(db_path: PathBuf) -> Result<(), String> {
         };
         drop(connection);
 
-        let identity =
-            runtime.and_then(|(pid, start, path)| Some((pid? as u32, start? as u64, path?)));
+        let identity = runtime
+            .clone()
+            .and_then(|(pid, start, path)| Some((pid? as u32, start? as u64, path?)));
 
         if let (Some(installation), Some((pid, process_start, path))) =
             (installation.clone(), identity)
