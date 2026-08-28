@@ -1,0 +1,21 @@
+name: final-ui-fix-once
+on:
+  push:
+    branches: ["feat/ludex-foundation"]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[final-ui-fix]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ludex-foundation
+      - run: python scripts/fix-final-ui.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.ts src/styles.css
+          git commit -m "fix: repair final UI build and artwork styling [final-ui-fix]" || exit 0
+          git push origin HEAD:feat/ludex-foundation
