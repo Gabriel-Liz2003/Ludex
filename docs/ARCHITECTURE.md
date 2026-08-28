@@ -1,37 +1,74 @@
-# Arquitetura do Ludex
+# Arquitetura do Ludex 0.9
 
-O Ludex usa Tauri 2 com backend Rust, UI TypeScript/Vite e SQLite local-first. O frontend nunca é a fonte de verdade para biblioteca, instalações ou tempo jogado.
+## Princípios
 
-## Identidade e instalações
+Ludex é local-first, offline-first e orientado a providers. O Desktop usa Tauri 2/Rust + TypeScript/Vite; o Android é nativo e compartilha o protocolo de dados, não uma UI WebView pesada. SQLite é a fonte de verdade no Desktop.
 
-`games` representa a identidade global do jogo. `installations` representa uma cópia jogável proveniente de um provider. `external_ids` relaciona IDs de providers à identidade global sem acoplar `Game` à Steam, Epic, GOG ou outro launcher.
+## Domínio
 
-A deduplicação atual é conservadora: primeiro usa `(provider, external_id)` e depois tenta uma correspondência única por título normalizado. Ambiguidade preserva registros separados.
+- `games`: identidade global e preferências do usuário.
+- `installations`: cópias jogáveis por provider/dispositivo.
+- `external_ids`: identidade externa estável por provider.
+- `play_sessions`: sessões medidas pelo Ludex.
+- `imported_playtime`: tempo histórico confiável importado, separado das sessões.
+- `game_metadata`: metadata/cache com flag de prioridade manual.
+- `collections` / `collection_games`: organização do usuário.
+- `emulators` / `roms`: configuração e biblioteca emulada.
+- `achievements`: modelo genérico, preenchido somente por fontes legítimas.
+- tabelas de processo: estado e membros de sessões multiprocesso.
+- tabelas de sync/save backup: IDs estáveis, timestamps e histórico de backups.
 
-## Steam
+Migrations são aditivas e compatíveis com bancos anteriores. O schema não depende de apagar/recriar a base.
 
-`providers/steam.rs` detecta a Steam pelo Registro do Windows e por caminhos conhecidos, lê `libraryfolders.vdf`, processa `appmanifest_*.acf` e gera instalações independentes. DLCs, runtimes, redistributables, Proton e ferramentas reconhecíveis são filtrados.
+## Providers
 
-A sincronização é idempotente porque a instalação Steam usa ID estável `steam:<AppID>` e o par `(provider, external_id)` possui índice único.
+`LibraryProvider`/`ProviderScan` isolam descoberta e parsing. O core importa `ScannedInstallation`, resolve identidade/deduplicação e persiste `Installation`. Launch é resolvido por provider, mas tracking nunca fica dentro do provider.
 
-## Launch e ProcessMonitor
+Isso permite reutilizar o mesmo fluxo para Steam, Epic, GOG, Xbox/MS Store, EA, Ubisoft, Battle.net e manual.
 
-Providers não são responsáveis por contabilizar horas. `launch_game` resolve uma instalação e usa o mecanismo específico do provider: Steam URI para Steam e `Command` direto para jogos manuais.
+## Deduplicação
 
-`process_monitor.rs` é independente dos providers. Para Steam, o Ludex captura os PIDs existentes antes do launch e só aceita processos novos cujo executável esteja dentro do diretório de instalação, ignorando processos genéricos da Steam e redistributables.
+Ordem de confiança:
 
-## Sessões e recuperação
+1. `(provider, external_id)` já conhecido;
+2. identidade externa/metadata estável;
+3. correspondência única por título normalizado;
+4. baixa confiança não é mergeada automaticamente.
 
-Uma `play_session` só começa depois da confirmação do processo. Durante execução, um heartbeat atualiza `last_seen_at`, PID e caminho. O encerramento deriva a duração de `started_at` e `ended_at`.
+Merge e split manual permitem corrigir casos ambíguos sem destruir sessões ou instalações.
 
-Ao iniciar, sessões sem `ended_at` são verificadas. Se o PID/caminho ainda existir, o monitor continua. Caso contrário, a sessão é encerrada usando o último heartbeat e um limite defensivo de 18 horas para impedir durações absurdas em dados corrompidos.
+## Process tracking
 
-As estatísticas exibidas são derivadas de `play_sessions`; `games.total_seconds` permanece apenas por compatibilidade com a migration inicial e não é a fonte de verdade.
+`ProcessMonitor` é independente de lojas. Ele captura snapshots, PPID/árvore, executable/path/start time/memória e classifica processos como jogo, launcher, anti-cheat ou ignorado. `ProcessCandidateScorer` centraliza evidências; discovery iniciado pelo Ludex e discovery externo usam thresholds distintos.
 
-## Concorrência
+Uma sessão começa somente após processo confiável e persistente. O tracker segue filhos/descendentes, troca o processo principal quando necessário, ignora launcher persistente sem jogo e termina após confirmação de ausência de processo de jogo. Heartbeat e recovery protegem contra crash do Ludex e PID reuse.
 
-Scans Steam são executados com `spawn_blocking`, fora da UI. O monitor de processos roda em threads de baixa frequência: 2 s durante a janela de detecção e 5 s durante uma sessão ativa. Não existe polling global contínuo para descobrir jogos iniciados fora do Ludex.
+## Metadata
 
-## Limitação atual
+`MetadataProvider` desacopla aquisição de metadata. A implementação local da Steam lê somente artwork já presente em `appcache/librarycache`. Atualizações automáticas respeitam `manual=1`, portanto uma edição do usuário não é sobrescrita.
 
-Sessões iniciadas diretamente pela Steam, sem passar pelo Ludex, ainda não são detectadas. A arquitetura deixa `ProcessMonitor` separado para que um watcher orientado a eventos ou de baixo custo possa ser adicionado depois sem acoplar essa responsabilidade ao Steam provider.
+## Emulação
+
+`EmulatorAdapter` transforma ROM + configuração em `Command` e argumentos, sem shell concatenado. Scanner recursivo persiste hash SHA-256 e não associa plataforma somente por extensão ambígua. ROM vira uma instalação jogável `emulation` e usa o mesmo tracking de sessão.
+
+## Sync
+
+O protocolo JSON é versionado. Jogos, instalações, sessões, metadata, coleções e playtime importado usam IDs estáveis. Sessões já existentes não são recriadas; campos com `updated_at` preservam versões mais novas. O transporte 0.9 é arquivo explícito, utilizável entre Desktop e Android sem servidor proprietário.
+
+## Android
+
+O Android mantém banco local próprio, detecta apps por PackageManager, usa `UsageStatsManager` para foreground e exporta/importa o mesmo envelope de sync. Nenhum Accessibility Service ou captura de tela é usado para contabilização.
+
+## Performance
+
+SQLite usa WAL, índices para título/provider/sessões e queries agregadas. A suíte contém teste sintético com milhares de jogos. UI usa imagens apenas quando necessárias e o cache de metadata armazena paths/URLs, não bitmaps no banco.
+
+## Segurança e erros
+
+- argumentos de executável são tokenizados;
+- providers geram seus próprios URIs/AUMIDs;
+- manifests inválidos retornam erro ou são ignorados com diagnóstico;
+- secrets não são hardcoded;
+- restore de saves não sobrescreve destino existente;
+- operações de filesystem validam existência e retornam mensagens ao usuário;
+- integrações de conta não usam endpoints não oficiais inventados.
