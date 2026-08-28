@@ -156,7 +156,7 @@ fn migrate_existing(connection: &Connection) -> Result<(), String> {
         ("working_dir", "TEXT"),
         ("size_bytes", "INTEGER"),
         ("last_updated", "INTEGER"),
-        ("updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+        ("updated_at", "TEXT"),
     ] {
         ensure_column(connection, "installations", name, definition)?;
     }
@@ -187,7 +187,8 @@ fn migrate_existing(connection: &Connection) -> Result<(), String> {
            external_id TEXT NOT NULL,
            PRIMARY KEY(provider, external_id)
          );
-         CREATE INDEX IF NOT EXISTS idx_external_ids_game ON external_ids(game_id);"
+         CREATE INDEX IF NOT EXISTS idx_external_ids_game ON external_ids(game_id);
+         UPDATE installations SET updated_at=CURRENT_TIMESTAMP WHERE updated_at IS NULL;"
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -503,4 +504,95 @@ pub fn get_game_details(
         installations,
         recent_sessions,
     }))
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::{add_manual_game, import_installations, list_games, open};
+    use crate::models::ScannedInstallation;
+    use std::fs;
+    use uuid::Uuid;
+
+    fn temp_db() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("ludex-test-{}.db", Uuid::new_v4()))
+    }
+
+    fn steam_game(external_id: &str, title: &str) -> ScannedInstallation {
+        ScannedInstallation {
+            provider: "steam".into(),
+            external_id: external_id.into(),
+            title: title.into(),
+            platform: "PC".into(),
+            install_dir: Some("C:\\Games\\Cyberpunk 2077".into()),
+            executable: None,
+            installed: true,
+            size_bytes: Some(100),
+            last_updated: Some(1),
+        }
+    }
+
+    #[test]
+    fn steam_reimport_is_idempotent() {
+        let path = temp_db();
+        let connection = open(&path).unwrap();
+        let item = steam_game("1091500", "Cyberpunk 2077™");
+        import_installations(
+            &connection,
+            "steam",
+            std::slice::from_ref(&item),
+            "C:\\Steam",
+            1,
+        )
+        .unwrap();
+        import_installations(
+            &connection,
+            "steam",
+            std::slice::from_ref(&item),
+            "C:\\Steam",
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(list_games(&connection).unwrap().len(), 1);
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM installations WHERE provider='steam'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(connection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn unique_normalized_title_deduplicates_manual_identity() {
+        let path = temp_db();
+        let connection = open(&path).unwrap();
+        add_manual_game(
+            &connection,
+            "manual-cp",
+            "Cyberpunk 2077",
+            "PC",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let result = import_installations(
+            &connection,
+            "steam",
+            &[steam_game("1091500", "Cyberpunk 2077™")],
+            "C:\\Steam",
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(result.games_created, 0);
+        assert_eq!(list_games(&connection).unwrap().len(), 1);
+        drop(connection);
+        let _ = fs::remove_file(path);
+    }
 }
