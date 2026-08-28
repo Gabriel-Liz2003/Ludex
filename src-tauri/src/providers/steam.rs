@@ -265,7 +265,12 @@ mod tests {
         let content = include_str!("../../tests/fixtures/libraryfolders.vdf");
         let paths = parse_libraryfolders(content);
         assert_eq!(paths.len(), 2);
-        assert!(paths[0].to_string_lossy().contains("SteamLibrary"));
+        assert!(paths
+            .iter()
+            .any(|path| path.to_string_lossy().contains("SteamLibrary")));
+        assert!(paths
+            .iter()
+            .any(|path| path.to_string_lossy().contains("Program Files (x86)")));
     }
 
     #[test]
