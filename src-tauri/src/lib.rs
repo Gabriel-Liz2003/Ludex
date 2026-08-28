@@ -8,6 +8,8 @@ mod product;
 mod product_models;
 mod providers;
 mod sessions;
+mod steam_data;
+mod updater;
 
 use models::{
     Game, GameDetails, Installation, LaunchResult, ProviderImportResult, ProviderStatus,
@@ -128,7 +130,7 @@ async fn sync_provider(
         let c = open_product(&path)?;
         let result = product::sync_provider(&c, &provider, &scan.installations, &root)?;
         if provider == "steam" {
-            let _ = metadata::refresh_local_metadata(&c);
+            let _ = steam_data::sync(&c)?;
         }
         Ok(result)
     })
@@ -167,7 +169,7 @@ async fn steam_status(state: tauri::State<'_, AppState>) -> Result<SteamStatus, 
 #[tauri::command]
 async fn sync_steam(state: tauri::State<'_, AppState>) -> Result<SteamImportResult, String> {
     let path = state.db_path.clone();
-    tauri::async_runtime::spawn_blocking(move||{let root=SteamProvider::detect_root().ok_or_else(||"Steam não encontrada".to_string())?;let libraries=SteamProvider::library_paths(&root)?;let items=SteamProvider::scan_from_root(&root)?;let c=open_product(&path)?;let r=db::import_installations(&c,"steam",&items,&root.to_string_lossy(),libraries.len())?;c.execute("INSERT INTO settings(key,value) VALUES('steam.last_sync',CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[]).map_err(|e|e.to_string())?;Ok(r)}).await.map_err(|e|e.to_string())?
+    tauri::async_runtime::spawn_blocking(move||{let root=SteamProvider::detect_root().ok_or_else(||"Steam não encontrada".to_string())?;let libraries=SteamProvider::library_paths(&root)?;let items=SteamProvider::scan_from_root(&root)?;let c=open_product(&path)?;let r=db::import_installations(&c,"steam",&items,&root.to_string_lossy(),libraries.len())?;let _=steam_data::sync(&c)?;c.execute("INSERT INTO settings(key,value) VALUES('steam.last_sync',CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[]).map_err(|e|e.to_string())?;Ok(r)}).await.map_err(|e|e.to_string())?
 }
 
 #[cfg(windows)]
@@ -496,6 +498,33 @@ fn diagnostics(state: tauri::State<'_, AppState>) -> Result<Vec<DiagnosticItem>,
     product::diagnostics(&open_product(&state.db_path)?)
 }
 
+#[tauri::command]
+fn load_local_artwork(path: String) -> Result<String, String> {
+    steam_data::load_local_artwork(&path)
+}
+
+#[tauri::command]
+async fn check_for_updates() -> Result<updater::UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(updater::check)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn install_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let data_dir = state.data_dir.clone();
+    let installer =
+        tauri::async_runtime::spawn_blocking(move || updater::download_latest(&data_dir))
+            .await
+            .map_err(|e| e.to_string())??;
+    updater::launch_installer(&installer)?;
+    app.exit(0);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_target(false).try_init();
@@ -550,7 +579,10 @@ pub fn run() {
             restore_save_backup,
             refresh_local_metadata,
             backup_database,
-            diagnostics
+            diagnostics,
+            load_local_artwork,
+            check_for_updates,
+            install_update
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

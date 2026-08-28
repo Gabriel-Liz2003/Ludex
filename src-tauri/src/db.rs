@@ -245,7 +245,10 @@ const GAME_SELECT: &str = "
 SELECT g.id, g.title, g.platform, g.source,
        COALESCE((SELECT executable FROM installations i WHERE i.game_id=g.id AND i.installed=1 AND i.executable IS NOT NULL LIMIT 1), g.executable),
        g.favorite, g.status,
-       COALESCE((SELECT SUM(duration_seconds) FROM play_sessions ps WHERE ps.game_id=g.id AND ps.ended_at IS NOT NULL), 0),
+       MAX(
+         COALESCE((SELECT SUM(duration_seconds) FROM play_sessions ps WHERE ps.game_id=g.id AND ps.ended_at IS NOT NULL), 0),
+         COALESCE((SELECT SUM(seconds) FROM imported_playtime ip WHERE ip.game_id=g.id), 0)
+       ),
        EXISTS(SELECT 1 FROM installations i WHERE i.game_id=g.id AND i.installed=1),
        COALESCE((SELECT GROUP_CONCAT(provider) FROM (SELECT DISTINCT provider FROM installations i2 WHERE i2.game_id=g.id)), ''),
        EXISTS(SELECT 1 FROM play_sessions aps WHERE aps.game_id=g.id AND aps.ended_at IS NULL),
@@ -439,7 +442,7 @@ pub fn get_game_details(
         return Ok(None);
     };
 
-    let stats = connection.query_row(
+    let mut stats = connection.query_row(
         "SELECT COALESCE(SUM(CASE WHEN ended_at IS NOT NULL THEN duration_seconds ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN ended_at IS NOT NULL AND datetime(started_at) >= datetime('now','-14 days') THEN duration_seconds ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN ended_at IS NOT NULL AND datetime(started_at) >= datetime('now','-30 days') THEN duration_seconds ELSE 0 END),0),
@@ -453,6 +456,14 @@ pub fn get_game_details(
             average_session_seconds: row.get::<_, f64>(4)? as i64, last_played_at: row.get(5)?,
         })
     ).map_err(|e| e.to_string())?;
+    let imported_total: i64 = connection
+        .query_row(
+            "SELECT COALESCE(SUM(seconds),0) FROM imported_playtime WHERE game_id=?1",
+            [game_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    stats.total_seconds = stats.total_seconds.max(imported_total);
 
     let mut installation_stmt = connection.prepare(
         "SELECT id, game_id, provider, external_id, executable, install_dir, working_dir, launch_args, installed FROM installations WHERE game_id=?1 ORDER BY installed DESC, provider"

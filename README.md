@@ -135,3 +135,10 @@ docs/                             documentação técnica
 - PlayStation/Xbox account library permanece limitada pelas APIs oficiais disponíveis para aplicativos de terceiros.
 
 Mais detalhes: `docs/ARCHITECTURE.md`, `docs/PROVIDERS.md`, `docs/EMULATION.md`, `docs/SYNC.md` e `docs/PROCESS_TRACKING.md`.
+
+## Atualizações Desktop
+
+A partir da versão 0.9.1, o Desktop Windows consulta as Releases oficiais deste repositório, baixa o instalador da versão mais recente dentro do próprio Ludex e inicia a atualização. O workflow `release.yml` publica automaticamente uma nova release quando `main` recebe uma versão ainda não publicada.
+
+A versão 0.9.1 também enriquece a importação Steam sem exigir chave de API: o Ludex lê o `localconfig.vdf` da conta Steam local mais recentemente usada para importar `Playtime` e usa primeiro o artwork local do cache, com fallback para o CDN oficial da Steam.
+
