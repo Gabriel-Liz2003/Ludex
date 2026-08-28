@@ -18,9 +18,8 @@ new = '''        let c = open_product(&path)?;
         }
         Ok(result)
 '''
-if old not in t:
-    raise SystemExit('sync_provider block not found')
-t = t.replace(old, new, 1)
+if old in t:
+    t = t.replace(old, new, 1)
 
 marker = '''#[tauri::command]
 fn list_collections(state: tauri::State<'_, AppState>) -> Result<Vec<CollectionRecord>, String> {
@@ -77,15 +76,19 @@ if 'fn backup_save_path(' not in t:
         raise SystemExit('diagnostics marker not found')
     t = t.replace(marker, commands + marker, 1)
 
+handler_start = t.find('generate_handler![')
+handler_text = t[handler_start:]
 for command, anchor in [
     ('collection_memberships,', 'list_collections,'),
     ('refresh_local_metadata,', 'backup_database,'),
     ('backup_save_path,\n            list_save_backups,\n            restore_save_backup,', 'refresh_local_metadata,'),
 ]:
-    if command.split(',')[0] not in t[t.find('generate_handler!['):]::
+    name = command.split(',')[0]
+    if name not in handler_text:
         if anchor not in t:
             raise SystemExit(f'invoke anchor missing: {anchor}')
         t = t.replace(anchor, command + '\n            ' + anchor, 1)
+        handler_text = t[t.find('generate_handler!['):]
 lib.write_text(t, encoding='utf-8')
 
 ui = Path('src/main.ts')
