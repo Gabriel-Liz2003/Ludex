@@ -23,7 +23,7 @@ use std::{
     process::Command,
 };
 use tauri::Manager;
-use tracing::{error, info};
+use tracing::error;
 use uuid::Uuid;
 
 struct AppState {
@@ -185,12 +185,13 @@ fn percent_triplet(value: &str) -> String {
     value
         .chars()
         .map(|c| match c {
-            ':' => "%3A".into(),
-            ' ' => "%20".into(),
+            ':' => "%3A".to_string(),
+            ' ' => "%20".to_string(),
             c if c.is_ascii_alphanumeric() || "-_.~".contains(c) => c.to_string(),
             c => format!("%{:02X}", c as u32),
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .join("")
 }
 fn spawn_direct(i: &Installation) -> Result<u32, String> {
     let exe = i

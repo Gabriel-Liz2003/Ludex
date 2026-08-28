@@ -60,11 +60,12 @@ fn scan_folder(root: &Path, out: &mut Vec<ScannedInstallation>) {
                         .trim_end_matches(".info")
                         .to_string()
                 });
+            let fallback_title = child.file_name().to_string_lossy().to_string();
             let title = value
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or_else(|| child.file_name().to_str().unwrap_or("GOG Game"))
-                .to_string();
+                .map(str::to_string)
+                .unwrap_or(fallback_title);
             let exe = primary_task(&value, &dir)
                 .filter(|p| p.exists())
                 .map(|p| p.to_string_lossy().to_string());

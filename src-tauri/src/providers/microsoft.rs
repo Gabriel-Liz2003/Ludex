@@ -1,5 +1,5 @@
 use crate::{models::ScannedInstallation, providers::ProviderScan};
-use std::{path::PathBuf, process::Command};
+use std::process::Command;
 
 #[cfg(windows)]
 pub fn scan() -> Result<ProviderScan, String> {
