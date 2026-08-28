@@ -19,7 +19,7 @@ jobs:
         with:
           components: rustfmt
       - name: Apply compatibility fixes and add icon
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
           import base64
