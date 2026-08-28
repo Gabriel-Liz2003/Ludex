@@ -48,6 +48,7 @@ pub struct PlaySession {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GameStats {
     pub total_seconds: i64,
+    pub imported_seconds: i64,
     pub last_14_seconds: i64,
     pub last_30_seconds: i64,
     pub session_count: i64,
@@ -74,6 +75,28 @@ pub struct ScannedInstallation {
     pub installed: bool,
     pub size_bytes: Option<i64>,
     pub last_updated: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub id: String,
+    pub name: String,
+    pub detected: bool,
+    pub root_path: Option<String>,
+    pub games_found: usize,
+    pub last_sync: Option<String>,
+    pub message: String,
+    pub can_launch: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderImportResult {
+    pub provider: String,
+    pub root_path: String,
+    pub games_found: usize,
+    pub games_created: usize,
+    pub installations_upserted: usize,
+    pub deduplicated: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
