@@ -207,27 +207,75 @@ fn ensure_artwork_fallbacks(connection: &Connection) -> Result<usize, String> {
         if !app_id.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
-        let cover = format!(
-            "https://shared.steamstatic.com/store_item_assets/steam/apps/{app_id}/library_600x900.jpg"
-        );
-        let hero = format!(
-            "https://shared.steamstatic.com/store_item_assets/steam/apps/{app_id}/library_hero.jpg"
-        );
-        connection
-            .execute(
-                "INSERT INTO game_metadata(game_id,cover,hero,source,manual,updated_at)
-                 VALUES(?1,?2,?3,'steam-cdn',0,CURRENT_TIMESTAMP)
-                 ON CONFLICT(game_id) DO UPDATE SET
-                   cover=CASE WHEN game_metadata.manual=0 AND (game_metadata.cover IS NULL OR trim(game_metadata.cover)='') THEN excluded.cover ELSE game_metadata.cover END,
-                   hero=CASE WHEN game_metadata.manual=0 AND (game_metadata.hero IS NULL OR trim(game_metadata.hero)='') THEN excluded.hero ELSE game_metadata.hero END,
-                   source=CASE WHEN game_metadata.manual=0 AND (game_metadata.cover IS NULL OR trim(game_metadata.cover)='') THEN excluded.source ELSE game_metadata.source END,
-                   updated_at=CASE WHEN game_metadata.manual=0 THEN CURRENT_TIMESTAMP ELSE game_metadata.updated_at END",
-                params![game_id, cover, hero],
-            )
-            .map_err(|e| e.to_string())?;
-        updated += 1;
+        let cover = format!("steam-artwork:{app_id}");
+        let hero = format!("steam-artwork-hero:{app_id}");
+        updated += connection.execute(
+            "INSERT INTO game_metadata(game_id,cover,hero,source,manual,updated_at)
+             VALUES(?1,?2,?3,'steam-account',0,CURRENT_TIMESTAMP)
+             ON CONFLICT(game_id) DO UPDATE SET
+               cover=CASE WHEN game_metadata.manual=0 AND (game_metadata.cover IS NULL OR trim(game_metadata.cover)='' OR game_metadata.source='steam-cdn') THEN excluded.cover ELSE game_metadata.cover END,
+               hero=CASE WHEN game_metadata.manual=0 AND (game_metadata.hero IS NULL OR trim(game_metadata.hero)='' OR game_metadata.source='steam-cdn') THEN excluded.hero ELSE game_metadata.hero END,
+               source=CASE WHEN game_metadata.manual=0 AND game_metadata.source='steam-cdn' THEN excluded.source ELSE game_metadata.source END,
+               updated_at=CASE WHEN game_metadata.manual=0 THEN CURRENT_TIMESTAMP ELSE game_metadata.updated_at END",
+            params![game_id, cover, hero],
+        ).map_err(|e| e.to_string())?;
     }
     Ok(updated)
+}
+
+fn steam_store_header(app_id: &str) -> Option<String> {
+    let response = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .user_agent("Ludex/0.9.2")
+        .build()
+        .ok()?
+        .get("https://store.steampowered.com/api/appdetails")
+        .query(&[("appids", app_id), ("cc", "br"), ("l", "brazilian")])
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let value: serde_json::Value = response.json().ok()?;
+    value
+        .get(app_id)?
+        .get("data")?
+        .get("header_image")?
+        .as_str()
+        .map(str::to_string)
+}
+
+pub fn resolve_artwork(value: &str) -> Result<String, String> {
+    if value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("data:")
+        || value.starts_with("blob:")
+    {
+        return Ok(value.to_string());
+    }
+    let (hero, app_id) = if let Some(v) = value.strip_prefix("steam-artwork-hero:") {
+        (true, v)
+    } else if let Some(v) = value.strip_prefix("steam-artwork:") {
+        (false, v)
+    } else {
+        return load_local_artwork(value);
+    };
+    if !app_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("Steam AppID inválido na artwork".into());
+    }
+    let local = crate::metadata::steam_artwork_for(app_id);
+    let candidate = if hero {
+        local.hero.or(local.cover)
+    } else {
+        local.cover.or(local.hero)
+    };
+    if let Some(path) = candidate {
+        if let Ok(data) = load_local_artwork(&path) {
+            return Ok(data);
+        }
+    }
+    steam_store_header(app_id)
+        .ok_or_else(|| "Artwork da Steam indisponível localmente e no fallback da loja".into())
 }
 
 pub fn sync(connection: &Connection) -> Result<(usize, usize), String> {

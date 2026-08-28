@@ -87,7 +87,8 @@ fn tokenize_vdf(content: &str) -> Vec<Token> {
             }
             _ => {
                 let start = i;
-                while i < chars.len() && !chars[i].is_whitespace() && !matches!(chars[i], '{' | '}') {
+                while i < chars.len() && !chars[i].is_whitespace() && !matches!(chars[i], '{' | '}')
+                {
                     i += 1;
                 }
                 out.push(Token::Text(chars[start..i].iter().collect()));
@@ -107,7 +108,8 @@ pub fn parse_loginusers_most_recent(content: &str) -> Option<String> {
         match &tokens[i] {
             Token::Text(key) if matches!(tokens.get(i + 1), Some(Token::Open)) => {
                 stack.push(key.clone());
-                if key.len() == 17 && key.chars().all(|c| c.is_ascii_digit()) && first_id.is_none() {
+                if key.len() == 17 && key.chars().all(|c| c.is_ascii_digit()) && first_id.is_none()
+                {
                     first_id = Some(key.clone());
                 }
                 i += 2;
@@ -115,7 +117,11 @@ pub fn parse_loginusers_most_recent(content: &str) -> Option<String> {
             Token::Text(key) => {
                 if let Some(Token::Text(value)) = tokens.get(i + 1) {
                     if key.eq_ignore_ascii_case("MostRecent") && value == "1" {
-                        if let Some(id) = stack.iter().rev().find(|v| v.len() == 17 && v.chars().all(|c| c.is_ascii_digit())) {
+                        if let Some(id) = stack
+                            .iter()
+                            .rev()
+                            .find(|v| v.len() == 17 && v.chars().all(|c| c.is_ascii_digit()))
+                        {
                             most_recent = Some(id.clone());
                         }
                     }
@@ -142,7 +148,9 @@ pub fn detect_steam_id(root: &Path) -> Option<String> {
 }
 
 pub fn status(connection: &Connection) -> Result<SteamAccountStatus, String> {
-    let steam_id = SteamProvider::detect_root().as_deref().and_then(detect_steam_id);
+    let steam_id = SteamProvider::detect_root()
+        .as_deref()
+        .and_then(detect_steam_id);
     let owned_games: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM external_ids WHERE provider='steam'",
@@ -245,8 +253,11 @@ fn upsert_owned_game(connection: &Connection, game: &OwnedGame) -> Result<(bool,
 }
 
 pub fn sync_owned_games(connection: &Connection) -> Result<SteamAccountSyncResult, String> {
-    let root = SteamProvider::detect_root().ok_or_else(|| "Steam não encontrada neste PC".to_string())?;
-    let steam_id = detect_steam_id(&root).ok_or_else(|| "Não foi possível detectar a conta Steam ativa em config/loginusers.vdf".to_string())?;
+    let root =
+        SteamProvider::detect_root().ok_or_else(|| "Steam não encontrada neste PC".to_string())?;
+    let steam_id = detect_steam_id(&root).ok_or_else(|| {
+        "Não foi possível detectar a conta Steam ativa em config/loginusers.vdf".to_string()
+    })?;
     let key = secrets::get(connection, "steam.web_api_key")?
         .ok_or_else(|| "Configure sua Steam Web API key em Configurações → Steam".to_string())?;
     let client = Client::builder()
@@ -312,6 +323,9 @@ mod tests {
           "76561198000000002" { "AccountName" "current" "MostRecent" "1" }
         }
         "#;
-        assert_eq!(parse_loginusers_most_recent(vdf).as_deref(), Some("76561198000000002"));
+        assert_eq!(
+            parse_loginusers_most_recent(vdf).as_deref(),
+            Some("76561198000000002")
+        );
     }
 }

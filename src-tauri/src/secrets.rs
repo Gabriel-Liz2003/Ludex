@@ -27,7 +27,10 @@ fn protect(value: &str) -> Result<String, String> {
 
 #[cfg(windows)]
 fn unprotect(value: &str) -> Result<String, String> {
-    if !value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')) {
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+    {
         return Err("Credencial protegida inválida".into());
     }
     let script = format!(
@@ -39,7 +42,9 @@ fn unprotect(value: &str) -> Result<String, String> {
         .output()
         .map_err(|e| format!("Falha ao abrir o armazenamento seguro do Windows: {e}"))?;
     if !output.status.success() {
-        return Err("Não foi possível desbloquear a credencial para este usuário do Windows".into());
+        return Err(
+            "Não foi possível desbloquear a credencial para este usuário do Windows".into(),
+        );
     }
     String::from_utf8(output.stdout)
         .map(|v| v.trim().to_string())
