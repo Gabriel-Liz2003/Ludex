@@ -1,314 +1,56 @@
 import { invoke } from '@tauri-apps/api/core';
 import './styles.css';
 
-type Game = {
-  id: string;
-  title: string;
-  platform: string;
-  source: string;
-  executable: string | null;
-  favorite: boolean;
-  status: string;
-  total_seconds: number;
-  installed: boolean;
-  providers: string[];
-  active: boolean;
-  last_played_at: string | null;
-  session_count: number;
-};
+type Game={id:string;title:string;platform:string;source:string;executable:string|null;favorite:boolean;status:string;total_seconds:number;installed:boolean;providers:string[];active:boolean;last_played_at:string|null;session_count:number};
+type Installation={id:string;provider:string;external_id:string|null;executable:string|null;install_dir:string|null;installed:boolean};
+type Details={game:Game;stats:{total_seconds:number;last_14_seconds:number;last_30_seconds:number;session_count:number;average_session_seconds:number;last_played_at:string|null};installations:Installation[];recent_sessions:{id:string;started_at:string;ended_at:string|null;duration_seconds:number;provider:string|null;recovered:boolean}[]};
+type Provider={id:string;name:string;detected:boolean;root_path:string|null;games_found:number;last_sync:string|null;message:string;can_launch:boolean};
+type Collection={id:string;name:string;kind:string;filter_json:string|null;game_count:number};
+type Emulator={id:string;name:string;platform:string;executable:string;arguments_template:string;rom_directory:string|null;bios_directory:string|null;saves_directory:string|null;extensions:string;core:string|null;enabled:boolean};
+type Rom={id:string;game_id:string;title:string;platform:string;path:string;emulator_id:string|null;hash_sha256:string|null;size_bytes:number|null;launch_args:string|null;core:string|null};
+type Metadata={game_id:string;description:string|null;developer:string|null;publisher:string|null;release_date:string|null;genres:string|null;cover:string|null;hero:string|null;source:string;manual:boolean;updated_at:string};
+type Stats={library_games:number;installed_games:number;never_played:number;tracked_seconds:number;imported_seconds:number;last_14_seconds:number;last_30_seconds:number;average_daily_seconds_30d:number;average_weekly_seconds_12w:number;by_provider:{name:string;seconds:number}[];by_platform:{name:string;seconds:number}[];top_games:{name:string;seconds:number}[];monthly:{label:string;seconds:number}[];yearly:{label:string;seconds:number}[]};
+type Diagnostic={level:string;area:string;message:string};
 
-type PlaySession = {
-  id: string;
-  started_at: string;
-  ended_at: string | null;
-  duration_seconds: number;
-  provider: string | null;
-  recovered: boolean;
-};
+const app=document.querySelector<HTMLDivElement>('#app')!;
+let games:Game[]=[];let selected:string|null=null;let details:Details|null=null;let view='library';let mode:<'grid'|'list'>='grid';let query='';let filter='all';let sort='title';
+const esc=(v:string)=>v.replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]!));
+const dur=(s:number)=>{if(!s)return '0 min';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}min`:`${m}min`};
+const date=(v:string|null)=>v?new Date(v).toLocaleString('pt-BR'):'Nunca';
+const providerLabel=(id:string)=>({steam:'Steam',epic:'Epic',gog:'GOG',xbox:'Xbox',ea:'EA',ubisoft:'Ubisoft',battlenet:'Battle.net',manual:'Manual',emulation:'Emulação',android:'Android'} as Record<string,string>)[id]||id;
+const initials=(title:string)=>title.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
 
-type GameDetails = {
-  game: Game;
-  stats: {
-    total_seconds: number;
-    last_14_seconds: number;
-    last_30_seconds: number;
-    session_count: number;
-    average_session_seconds: number;
-    last_played_at: string | null;
-  };
-  recent_sessions: PlaySession[];
-};
-
-type SteamStatus = {
-  detected: boolean;
-  root_path: string | null;
-  library_count: number;
-  games_found: number;
-  last_sync: string | null;
-};
-
-type SteamImportResult = {
-  games_found: number;
-  games_created: number;
-  installations_upserted: number;
-  deduplicated: number;
-};
-
-type LaunchResult = {
-  launched: boolean;
-  already_running: boolean;
-  message: string;
-};
-
-const app = document.querySelector<HTMLDivElement>('#app')!;
-
-app.innerHTML = `
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand">LUDEX <span>alpha</span></div>
-      <input id="search" class="search" placeholder="Buscar na biblioteca" />
-      <nav>
-        <button class="nav active" data-view="library">Biblioteca</button>
-        <button class="nav" disabled>Coleções</button>
-        <button class="nav" disabled>Emulação</button>
-        <button class="nav" disabled>Estatísticas</button>
-        <button class="nav" data-view="settings">Configurações</button>
-      </nav>
-      <div id="game-list" class="game-list"></div>
-    </aside>
-
-    <main class="content">
-      <section id="library-view">
-        <section class="hero">
-          <div class="hero-topline">
-            <p class="eyebrow">Biblioteca universal</p>
-            <span id="active-badge" class="active-badge hidden">EM JOGO</span>
-          </div>
-          <h1 id="selected-title">Seus jogos, em um só lugar.</h1>
-          <p id="selected-meta" class="muted">Windows, Android, consoles e emulação — local-first.</p>
-          <div id="selected-stats" class="selected-stats hidden"></div>
-          <div class="hero-actions">
-            <button id="play-game" class="play hidden">JOGAR</button>
-            <button id="add-game" class="secondary">+ Adicionar jogo</button>
-          </div>
-          <div id="launch-message" class="launch-message hidden"></div>
-        </section>
-
-        <section class="stats">
-          <article><strong id="game-count">0</strong><span>jogos</span></article>
-          <article><strong id="hours-count">0h</strong><span>tempo medido pelo Ludex</span></article>
-          <article><strong>Offline</strong><span>funciona sem conta</span></article>
-        </section>
-
-        <section id="recent-panel" class="recent-panel hidden">
-          <div class="section-title"><h2>Sessões recentes</h2><span>medição local</span></div>
-          <div id="recent-sessions" class="sessions"></div>
-        </section>
-
-        <section>
-          <div class="section-title"><h2>Biblioteca</h2><span id="filter-label">Todos</span></div>
-          <div id="grid" class="grid"></div>
-        </section>
-      </section>
-
-      <section id="settings-view" class="hidden">
-        <div class="settings-header">
-          <p class="eyebrow">Configurações</p>
-          <h1>Bibliotecas</h1>
-          <p class="muted">Providers são sincronizados de forma independente e os dados continuam locais.</p>
-        </div>
-        <article class="provider-card">
-          <div>
-            <div class="provider-title"><strong>Steam</strong><span id="steam-detected" class="status-pill">Verificando…</span></div>
-            <p id="steam-path" class="muted">Caminho ainda não verificado.</p>
-          </div>
-          <div class="provider-stats">
-            <span><strong id="steam-libraries">—</strong>bibliotecas</span>
-            <span><strong id="steam-games">—</strong>jogos encontrados</span>
-            <span><strong id="steam-sync">—</strong>última sincronização</span>
-          </div>
-          <button id="sync-steam" class="primary">Atualizar biblioteca Steam</button>
-          <p id="steam-result" class="muted small"></p>
-        </article>
-      </section>
-    </main>
-  </div>
-`;
-
-let games: Game[] = [];
-let selectedId: string | null = null;
-let currentFilter = '';
-let currentView: 'library' | 'settings' = 'library';
-
-const escapeHtml = (value: string) => value.replace(/[&<>'"]/g, (char) => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
-}[char]!));
-
-const formatDuration = (seconds: number) => {
-  if (seconds < 60) return `${seconds}s`;
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return hours > 0 ? `${hours}h ${minutes}min` : `${minutes}min`;
-};
-
-const formatDate = (value: string | null) => {
-  if (!value) return 'Nunca';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('pt-BR');
-};
-
-function render(filter = currentFilter) {
-  currentFilter = filter;
-  const normalized = filter.trim().toLowerCase();
-  const visible = games.filter((game) => game.title.toLowerCase().includes(normalized));
-  const grid = document.querySelector<HTMLDivElement>('#grid')!;
-  const list = document.querySelector<HTMLDivElement>('#game-list')!;
-
-  grid.innerHTML = visible.length
-    ? visible.map((game) => `
-      <button class="game-card ${game.active ? 'playing' : ''}" data-id="${game.id}">
-        <div class="cover"><span>${escapeHtml(game.title.slice(0, 1).toUpperCase())}</span>${game.active ? '<b>EM JOGO</b>' : ''}</div>
-        <div class="game-info">
-          <strong>${escapeHtml(game.title)}</strong>
-          <small>${escapeHtml(game.providers.join(', ') || game.source)} · ${game.installed ? 'Instalado' : 'Não instalado'}</small>
-          <small>${formatDuration(game.total_seconds)} · ${game.session_count} sessão(ões)</small>
-        </div>
-      </button>`).join('')
-    : `<div class="empty">Nenhum jogo encontrado. Sincronize a Steam ou adicione um jogo manualmente.</div>`;
-
-  list.innerHTML = visible.map((game) => `<button class="list-item ${game.active ? 'playing-text' : ''}" data-id="${game.id}">${escapeHtml(game.title)}</button>`).join('');
-  document.querySelector('#game-count')!.textContent = String(games.length);
-  document.querySelector('#hours-count')!.textContent = formatDuration(games.reduce((sum, game) => sum + game.total_seconds, 0));
-  document.querySelector('#filter-label')!.textContent = normalized ? `${visible.length} resultado(s)` : 'Todos';
-
-  document.querySelectorAll<HTMLElement>('[data-id]').forEach((element) => {
-    element.addEventListener('click', () => void selectGame(element.dataset.id!));
-  });
+function shell(){app.innerHTML=`<div class="app-shell"><aside class="rail"><div class="brand"><b>Ludex</b><span>0.9</span></div><nav>
+${[['library','Biblioteca'],['recent','Recentes'],['favorites','Favoritos'],['installed','Instalados'],['collections','Coleções'],['emulation','Emulação'],['stats','Estatísticas'],['settings','Configurações'],['diagnostics','Diagnóstico']].map(([id,n])=>`<button data-view="${id}" class="nav-btn ${view===id?'active':''}">${n}</button>`).join('')}
+</nav><div class="privacy">Local-first<br><span>Sem conta obrigatória</span></div></aside><main><header class="topbar"><div><p class="eyebrow">Biblioteca universal</p><h1 id="view-title">Ludex</h1></div><div class="top-actions"><input id="search" value="${esc(query)}" placeholder="Buscar jogos"><button id="add-manual" class="ghost">+ Jogo</button></div></header><div id="content"></div></main></div><div id="modal-root"></div>`;
+ document.querySelectorAll<HTMLElement>('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view!;shell();void renderView()});
+ document.querySelector<HTMLInputElement>('#search')!.oninput=e=>{query=(e.target as HTMLInputElement).value;if(['library','recent','favorites','installed'].includes(view))renderLibrary()};
+ document.querySelector<HTMLButtonElement>('#add-manual')!.onclick=()=>manualModal();
 }
-
-async function selectGame(id: string) {
-  selectedId = id;
-  const details = await invoke<GameDetails | null>('get_game_details', { gameId: id });
-  if (!details) return;
-  const game = details.game;
-  document.querySelector('#selected-title')!.textContent = game.title;
-  document.querySelector('#selected-meta')!.textContent = `${game.platform} · ${game.providers.join(', ') || game.source} · ${game.installed ? 'Instalado' : 'Não instalado'} · Última vez: ${formatDate(details.stats.last_played_at)}`;
-
-  const stats = document.querySelector<HTMLDivElement>('#selected-stats')!;
-  stats.classList.remove('hidden');
-  stats.innerHTML = `
-    <span><strong>${formatDuration(details.stats.total_seconds)}</strong> total</span>
-    <span><strong>${formatDuration(details.stats.last_14_seconds)}</strong> últimas 2 semanas</span>
-    <span><strong>${formatDuration(details.stats.last_30_seconds)}</strong> últimos 30 dias</span>
-    <span><strong>${formatDuration(details.stats.average_session_seconds)}</strong> média/sessão</span>`;
-
-  const badge = document.querySelector('#active-badge')!;
-  badge.classList.toggle('hidden', !game.active);
-  const play = document.querySelector<HTMLButtonElement>('#play-game')!;
-  play.classList.remove('hidden');
-  play.disabled = game.active || !game.installed;
-  play.textContent = game.active ? 'EM JOGO' : game.installed ? 'JOGAR' : 'NÃO INSTALADO';
-
-  const panel = document.querySelector('#recent-panel')!;
-  const sessions = document.querySelector('#recent-sessions')!;
-  panel.classList.toggle('hidden', details.recent_sessions.length === 0);
-  sessions.innerHTML = details.recent_sessions.map((session) => `
-    <div class="session-row">
-      <span><strong>${formatDate(session.started_at)}</strong><small>${escapeHtml(session.provider || 'local')}${session.recovered ? ' · recuperada' : ''}</small></span>
-      <b>${session.ended_at ? formatDuration(session.duration_seconds) : 'EM JOGO'}</b>
-    </div>`).join('');
+function title(t:string){document.querySelector('#view-title')!.textContent=t}
+function filteredGames(){let v=games.filter(g=>g.title.toLowerCase().includes(query.toLowerCase()));if(view==='recent')v=v.filter(g=>g.last_played_at).sort((a,b)=>(b.last_played_at||'').localeCompare(a.last_played_at||''));if(view==='favorites'||filter==='favorite')v=v.filter(g=>g.favorite);if(view==='installed'||filter==='installed')v=v.filter(g=>g.installed);if(filter==='uninstalled')v=v.filter(g=>!g.installed);if(filter==='never')v=v.filter(g=>g.session_count===0);if(filter==='completed')v=v.filter(g=>['Concluído','100%'].includes(g.status));if(filter.startsWith('provider:'))v=v.filter(g=>g.providers.includes(filter.slice(9)));if(sort==='playtime')v.sort((a,b)=>b.total_seconds-a.total_seconds);else if(sort==='recent')v.sort((a,b)=>(b.last_played_at||'').localeCompare(a.last_played_at||''));else v.sort((a,b)=>a.title.localeCompare(b.title));return v}
+function cover(g:Game){return `<div class="cover-art ${g.active?'live':''}"><span>${esc(initials(g.title))}</span>${g.active?'<b>EM JOGO</b>':''}</div>`}
+function renderLibrary(){title(view==='recent'?'Recentes':view==='favorites'?'Favoritos':view==='installed'?'Instalados':'Biblioteca');const content=document.querySelector('#content')!;const visible=filteredGames();if(!games.length){content.innerHTML=`<section class="onboarding"><span class="orb">L</span><h2>Monte sua biblioteca</h2><p>O Ludex pode detectar seus launchers, importar ROMs ou cadastrar jogos portáteis sem exigir conta.</p><div><button data-go="settings" class="primary">Detectar launchers</button><button id="empty-add" class="ghost">Adicionar manualmente</button></div></section>`;(document.querySelector('[data-go="settings"]') as HTMLButtonElement).onclick=()=>{view='settings';shell();void renderView()};(document.querySelector('#empty-add') as HTMLButtonElement).onclick=()=>manualModal();return}
+ content.innerHTML=`<section class="toolbar"><div class="chips"><button data-filter="all">Todos</button><button data-filter="favorite">Favoritos</button><button data-filter="never">Nunca jogados</button><button data-filter="completed">Concluídos</button>${['steam','epic','gog','xbox','ea','ubisoft','battlenet','manual','emulation'].map(p=>`<button data-filter="provider:${p}">${providerLabel(p)}</button>`).join('')}</div><div><select id="sort"><option value="title">Título</option><option value="recent">Recentes</option><option value="playtime">Mais jogados</option></select><button id="view-mode" class="icon-btn">${mode==='grid'?'☷':'▦'}</button></div></section><section class="library-layout"><div class="catalog ${mode}">${visible.map(g=>mode==='grid'?`<button class="game-tile ${selected===g.id?'selected':''}" data-game="${g.id}">${cover(g)}<strong>${esc(g.title)}</strong><small>${esc(g.providers.map(providerLabel).join(' · ')||g.source)}</small></button>`:`<button class="game-row ${selected===g.id?'selected':''}" data-game="${g.id}">${cover(g)}<span><strong>${esc(g.title)}</strong><small>${esc(g.platform)} · ${esc(g.providers.map(providerLabel).join(', ')||g.source)}</small></span><b>${dur(g.total_seconds)}</b><i>${g.status}</i></button>`).join('')||'<p class="empty">Nenhum jogo corresponde aos filtros.</p>'}</div><aside id="detail-pane" class="detail-pane"></aside></section>`;
+ document.querySelectorAll<HTMLElement>('[data-filter]').forEach(b=>{b.classList.toggle('active',b.dataset.filter===filter);b.onclick=()=>{filter=b.dataset.filter!;renderLibrary()}});const s=document.querySelector<HTMLSelectElement>('#sort')!;s.value=sort;s.onchange=()=>{sort=s.value;renderLibrary()};document.querySelector<HTMLButtonElement>('#view-mode')!.onclick=()=>{mode=mode==='grid'?'list':'grid';renderLibrary()};document.querySelectorAll<HTMLElement>('[data-game]').forEach(b=>b.onclick=()=>void selectGame(b.dataset.game!));if(selected)void selectGame(selected,false);
 }
-
-async function loadGames(refreshSelection = false) {
-  try {
-    games = await invoke<Game[]>('list_games');
-    render();
-    if (selectedId && refreshSelection) await selectGame(selectedId);
-  } catch (error) {
-    console.error('Falha ao carregar biblioteca', error);
-  }
+async function selectGame(id:string,rerender=true){selected=id;details=await invoke<Details|null>('get_game_details',{gameId:id});if(!details)return;if(rerender)renderLibrary();const pane=document.querySelector('#detail-pane');if(!pane)return;const g=details.game;let meta:Metadata|null=null;try{meta=await invoke('get_metadata',{gameId:id})}catch{}const playable=details.installations.filter(i=>i.installed);pane.innerHTML=`<div class="detail-hero">${cover(g)}<div><span>${esc(g.platform)}</span><h2>${esc(g.title)}</h2><p>${esc(g.providers.map(providerLabel).join(' · ')||g.source)}</p></div></div><div class="detail-actions"><button id="play" class="primary" ${!g.installed||g.active?'disabled':''}>${g.active?'EM JOGO':g.installed?'JOGAR':'NÃO INSTALADO'}</button><button id="fav" class="ghost">${g.favorite?'★':'☆'}</button><select id="status">${['Quero jogar','Jogando','Pausado','Concluído','100%','Abandonado'].map(x=>`<option ${x===g.status?'selected':''}>${x}</option>`).join('')}</select></div>${playable.length>1?`<label>Instalação<select id="installation">${playable.map(i=>`<option value="${i.id}">${providerLabel(i.provider)}</option>`).join('')}</select></label>`:''}<div class="metric-grid"><span><b>${dur(details.stats.total_seconds)}</b>Total</span><span><b>${dur(details.stats.last_14_seconds)}</b>2 semanas</span><span><b>${details.stats.session_count}</b>Sessões</span></div><div class="metadata"><div class="section-head"><h3>Sobre</h3><button id="edit-meta" class="text-btn">Editar</button></div><p>${esc(meta?.description||'Sem descrição. Adicione metadata manual para manter sua biblioteca organizada.')}</p><small>${esc([meta?.developer,meta?.publisher,meta?.release_date,meta?.genres].filter(Boolean).join(' · '))}</small></div><div class="sessions"><h3>Sessões recentes</h3>${details.recent_sessions.map(s=>`<div><span>${date(s.started_at)}<small>${providerLabel(s.provider||'local')}${s.recovered?' · recuperada':''}</small></span><b>${s.ended_at?dur(s.duration_seconds):'EM JOGO'}</b></div>`).join('')||'<p class="muted">Nenhuma sessão registrada.</p>'}</div>`;
+ const play=document.querySelector<HTMLButtonElement>('#play');if(play)play.onclick=async()=>{play.disabled=true;try{const installationId=document.querySelector<HTMLSelectElement>('#installation')?.value;if(installationId)await invoke('launch_game_installation',{gameId:id,installationId});else await invoke('launch_game',{gameId:id});toast('Jogo iniciado.');}catch(e){toast(String(e),true)}setTimeout(()=>void refresh(true),1200)};
+ (document.querySelector('#fav') as HTMLButtonElement).onclick=async()=>{await invoke('set_favorite',{gameId:id,value:!g.favorite});await refresh(true)};(document.querySelector('#status') as HTMLSelectElement).onchange=async e=>{await invoke('set_game_status',{gameId:id,status:(e.target as HTMLSelectElement).value});await refresh(true)};(document.querySelector('#edit-meta') as HTMLButtonElement).onclick=()=>metadataModal(g,meta);
 }
+function modal(html:string){document.querySelector('#modal-root')!.innerHTML=`<div class="modal-backdrop"><div class="modal">${html}</div></div>`;document.querySelectorAll<HTMLElement>('[data-close]').forEach(b=>b.onclick=()=>document.querySelector('#modal-root')!.replaceChildren())}
+function manualModal(){modal(`<div class="modal-head"><h2>Adicionar jogo</h2><button data-close>×</button></div><form id="manual-form"><label>Nome<input name="title" required></label><label>Plataforma<input name="platform" value="PC"></label><label>Executável<input name="executable" placeholder="C:\\Games\\game.exe"></label><label>Diretório de trabalho<input name="working"></label><label>Argumentos<input name="args"></label><button class="primary">Adicionar</button></form>`);(document.querySelector('#manual-form') as HTMLFormElement).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget as HTMLFormElement);try{await invoke('add_manual_game',{title:f.get('title'),platform:f.get('platform'),executable:f.get('executable')||null,workingDir:f.get('working')||null,launchArgs:f.get('args')||null});document.querySelector('#modal-root')!.replaceChildren();await refresh();}catch(err){toast(String(err),true)}}}
+function metadataModal(g:Game,m:Metadata|null){modal(`<div class="modal-head"><h2>Metadata · ${esc(g.title)}</h2><button data-close>×</button></div><form id="meta-form"><label>Descrição<textarea name="description">${esc(m?.description||'')}</textarea></label><div class="two"><label>Desenvolvedor<input name="developer" value="${esc(m?.developer||'')}"></label><label>Publisher<input name="publisher" value="${esc(m?.publisher||'')}"></label></div><div class="two"><label>Lançamento<input name="release" value="${esc(m?.release_date||'')}"></label><label>Gêneros<input name="genres" value="${esc(m?.genres||'')}"></label></div><label>Capa (URL/caminho)<input name="cover" value="${esc(m?.cover||'')}"></label><label>Hero (URL/caminho)<input name="hero" value="${esc(m?.hero||'')}"></label><button class="primary">Salvar</button></form>`);(document.querySelector('#meta-form') as HTMLFormElement).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget as HTMLFormElement);await invoke('save_metadata',{metadata:{game_id:g.id,description:f.get('description')||null,developer:f.get('developer')||null,publisher:f.get('publisher')||null,release_date:f.get('release')||null,genres:f.get('genres')||null,cover:f.get('cover')||null,hero:f.get('hero')||null,source:'manual',manual:true,updated_at:new Date().toISOString()}});document.querySelector('#modal-root')!.replaceChildren();await selectGame(g.id)}}
 
-async function loadSteamStatus() {
-  const statusLabel = document.querySelector('#steam-detected')!;
-  try {
-    const status = await invoke<SteamStatus>('steam_status');
-    statusLabel.textContent = status.detected ? 'Detectada' : 'Não detectada';
-    statusLabel.classList.toggle('ok', status.detected);
-    document.querySelector('#steam-path')!.textContent = status.root_path || 'A instalação da Steam não foi localizada.';
-    document.querySelector('#steam-libraries')!.textContent = String(status.library_count);
-    document.querySelector('#steam-games')!.textContent = String(status.games_found);
-    document.querySelector('#steam-sync')!.textContent = status.last_sync ? formatDate(status.last_sync) : 'Nunca';
-    document.querySelector<HTMLButtonElement>('#sync-steam')!.disabled = !status.detected;
-  } catch (error) {
-    statusLabel.textContent = 'Erro';
-    document.querySelector('#steam-path')!.textContent = String(error);
-  }
-}
+async function renderCollections(){title('Coleções');const cols=await invoke<Collection[]>('list_collections');document.querySelector('#content')!.innerHTML=`<section class="page"><div class="page-actions"><p>Organize sua biblioteca sem alterar as instalações.</p><button id="new-col" class="primary">Nova coleção</button></div><div class="cards">${cols.map(c=>`<article><h3>${esc(c.name)}</h3><p>${c.game_count} jogo(s)</p><div><button data-rename="${c.id}" class="ghost">Renomear</button><button data-delete="${c.id}" class="danger">Excluir</button></div></article>`).join('')||'<div class="empty">Nenhuma coleção criada.</div>'}</div></section>`;(document.querySelector('#new-col') as HTMLButtonElement).onclick=async()=>{const n=prompt('Nome da coleção');if(n?.trim()){await invoke('create_collection',{name:n.trim()});void renderCollections()}};document.querySelectorAll<HTMLElement>('[data-rename]').forEach(b=>b.onclick=async()=>{const n=prompt('Novo nome');if(n?.trim()){await invoke('rename_collection',{collectionId:b.dataset.rename,name:n});void renderCollections()}});document.querySelectorAll<HTMLElement>('[data-delete]').forEach(b=>b.onclick=async()=>{if(confirm('Excluir esta coleção?')){await invoke('delete_collection',{collectionId:b.dataset.delete});void renderCollections()}})}
+async function renderEmulation(){title('Emulação');const [emus,roms]=await Promise.all([invoke<Emulator[]>('list_emulators'),invoke<Rom[]>('list_roms')]);document.querySelector('#content')!.innerHTML=`<section class="page"><div class="page-actions"><div><h2>Emuladores</h2><p>Configuração genérica; Ludex não distribui ROMs nem BIOS.</p></div><button id="new-emu" class="primary">Configurar emulador</button></div><div class="cards">${emus.map(e=>`<article><h3>${esc(e.name)}</h3><p>${esc(e.platform)} · ${esc(e.extensions||'extensões personalizadas')}</p><small>${esc(e.executable)}</small></article>`).join('')||'<div class="empty">Nenhum emulador configurado.</div>'}</div><div class="page-actions"><h2>ROMs <span class="count">${roms.length}</span></h2><button id="scan-rom" class="ghost">Escanear pasta</button></div><div class="rom-list">${roms.map(r=>`<div><span><b>${esc(r.title)}</b><small>${esc(r.platform)} · ${esc(r.path)}</small></span><button data-rom="${r.id}" class="primary">JOGAR</button></div>`).join('')||'<p class="empty">Nenhuma ROM importada.</p>'}</div></section>`;(document.querySelector('#new-emu') as HTMLButtonElement).onclick=()=>emulatorModal();(document.querySelector('#scan-rom') as HTMLButtonElement).onclick=()=>romScanModal(emus);document.querySelectorAll<HTMLElement>('[data-rom]').forEach(b=>b.onclick=async()=>{try{await invoke('launch_rom',{romId:b.dataset.rom});toast('ROM iniciada.')}catch(e){toast(String(e),true)}})}
+function emulatorModal(){modal(`<div class="modal-head"><h2>Emulador</h2><button data-close>×</button></div><form id="emu-form"><label>Preset<select name="preset"><option>Personalizado</option>${['RetroArch','Dolphin','PCSX2','RPCS3','PPSSPP','DuckStation','Cemu','Ryujinx','melonDS','mGBA'].map(x=>`<option>${x}</option>`).join('')}</select></label><label>Nome<input name="name" required></label><label>Plataforma<input name="platform" required></label><label>Executável<input name="executable" required></label><label>Argumentos <small>use {rom} e {core}</small><input name="args" value="{rom}"></label><label>Extensões<input name="ext"></label><label>ROM folder<input name="romdir"></label><label>BIOS folder<input name="bios"></label><label>Saves folder<input name="saves"></label><label>Core RetroArch<input name="core"></label><button class="primary">Salvar</button></form>`);const form=document.querySelector('#emu-form') as HTMLFormElement;(form.elements.namedItem('preset') as HTMLSelectElement).onchange=async e=>{const n=(e.target as HTMLSelectElement).value;if(n==='Personalizado')return;const p=await invoke<[string,string,string]|null>('emulator_preset',{name:n});if(p){(form.elements.namedItem('name') as HTMLInputElement).value=n;(form.elements.namedItem('platform') as HTMLInputElement).value=p[0];(form.elements.namedItem('args') as HTMLInputElement).value=p[1];(form.elements.namedItem('ext') as HTMLInputElement).value=p[2]}};form.onsubmit=async e=>{e.preventDefault();const f=new FormData(form);try{await invoke('save_emulator',{emulator:{id:crypto.randomUUID(),name:f.get('name'),platform:f.get('platform'),executable:f.get('executable'),arguments_template:f.get('args'),rom_directory:f.get('romdir')||null,bios_directory:f.get('bios')||null,saves_directory:f.get('saves')||null,extensions:f.get('ext')||'',core:f.get('core')||null,enabled:true}});document.querySelector('#modal-root')!.replaceChildren();void renderEmulation()}catch(err){toast(String(err),true)}}}
+function romScanModal(emus:Emulator[]){modal(`<div class="modal-head"><h2>Escanear ROMs</h2><button data-close>×</button></div><form id="rom-form"><label>Pasta<input name="folder" required></label><label>Plataforma<input name="platform" required placeholder="PlayStation 2"></label><label>Emulador<select name="emulator"><option value="">Associar depois</option>${emus.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select></label><label class="check"><input type="checkbox" name="recursive" checked> Incluir subpastas</label><button class="primary">Escanear</button></form>`);(document.querySelector('#rom-form') as HTMLFormElement).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget as HTMLFormElement);try{const r=await invoke<any>('scan_roms',{folder:f.get('folder'),platform:f.get('platform'),emulatorId:f.get('emulator')||null,recursive:f.has('recursive')});toast(`${r.imported} ROM(s) importada(s), ${r.duplicates} duplicada(s).`);document.querySelector('#modal-root')!.replaceChildren();void renderEmulation()}catch(err){toast(String(err),true)}}}
+async function renderStats(){title('Estatísticas');const s=await invoke<Stats>('library_stats');const bars=(v:{name:string;seconds:number}[])=>v.map(x=>`<div class="bar-row"><span>${esc(x.name)}</span><div><i style="width:${Math.max(3,Math.round(x.seconds/Math.max(...v.map(y=>y.seconds),1)*100))}%"></i></div><b>${dur(x.seconds)}</b></div>`).join('');document.querySelector('#content')!.innerHTML=`<section class="page"><div class="stat-cards"><article><b>${dur(s.tracked_seconds)}</b><span>Tempo Ludex</span></article><article><b>${dur(s.imported_seconds)}</b><span>Importado</span></article><article><b>${s.library_games}</b><span>Biblioteca</span></article><article><b>${s.never_played}</b><span>Nunca jogados</span></article><article><b>${dur(s.last_14_seconds)}</b><span>2 semanas</span></article><article><b>${dur(s.last_30_seconds)}</b><span>30 dias</span></article></div><div class="stat-columns"><article><h3>Mais jogados</h3>${bars(s.top_games)}</article><article><h3>Por provider</h3>${bars(s.by_provider)}</article><article><h3>Por plataforma</h3>${bars(s.by_platform)}</article></div><article class="timeline"><h3>Meses</h3><div>${s.monthly.slice().reverse().map(m=>`<span title="${esc(m.label)} · ${dur(m.seconds)}" style="height:${Math.max(8,m.seconds/Math.max(...s.monthly.map(x=>x.seconds),1)*140)}px"></span>`).join('')}</div></article></section>`}
+async function renderSettings(){title('Configurações');const ps=await invoke<Provider[]>('provider_statuses');document.querySelector('#content')!.innerHTML=`<section class="page"><h2>Providers</h2><div class="provider-grid">${ps.map(p=>`<article><div class="provider-head"><h3>${esc(p.name)}</h3><span class="pill ${p.detected?'ok':''}">${p.detected?'Detectado':'Não detectado'}</span></div><p>${esc(p.message)}</p><small>${esc(p.root_path||'Sem caminho local exposto')}</small><div class="provider-foot"><span>${p.games_found} jogo(s) · sync ${date(p.last_sync)}</span><button data-sync="${p.id}" class="ghost">Sincronizar</button></div></article>`).join('')}</div><h2>Dados e sincronização</h2><div class="settings-panels"><article><h3>Sync por arquivo</h3><p>Exporta um bundle JSON versionado para mover entre Desktop e Android. IDs de sessão evitam duplicidade.</p><div><button id="export-json" class="primary">Exportar JSON</button><button id="import-json" class="ghost">Importar JSON</button></div><textarea id="sync-json" placeholder="O JSON exportado aparece aqui. Cole um bundle para importar."></textarea></article><article><h3>Backup do banco</h3><p>Cria uma cópia SQLite consistente na pasta local de backups do Ludex.</p><button id="db-backup" class="ghost">Criar backup</button><p id="backup-path" class="muted"></p></article></div><h2>Privacidade</h2><p class="muted">Biblioteca, sessões e metadata permanecem locais. Não há telemetria obrigatória nem servidor proprietário.</p></section>`;document.querySelectorAll<HTMLElement>('[data-sync]').forEach(b=>b.onclick=async()=>{b.textContent='Sincronizando…';try{const r=await invoke<any>('sync_provider',{provider:b.dataset.sync});toast(`${r.games_found} encontrados · ${r.games_created} novos.`);await refresh();void renderSettings()}catch(e){toast(String(e),true);b.textContent='Sincronizar'}});(document.querySelector('#export-json') as HTMLButtonElement).onclick=async()=>{(document.querySelector('#sync-json') as HTMLTextAreaElement).value=await invoke('export_backup_json')};(document.querySelector('#import-json') as HTMLButtonElement).onclick=async()=>{const json=(document.querySelector('#sync-json') as HTMLTextAreaElement).value;if(!json.trim())return;try{const r=await invoke<any>('import_sync_json',{json});toast(`${r.inserted} registros importados.`);await refresh()}catch(e){toast(String(e),true)}};(document.querySelector('#db-backup') as HTMLButtonElement).onclick=async()=>{try{const p=await invoke<string>('backup_database');document.querySelector('#backup-path')!.textContent=p;toast('Backup criado.')}catch(e){toast(String(e),true)}}}
+async function renderDiagnostics(){title('Diagnóstico');const [d,p]=await Promise.all([invoke<Diagnostic[]>('diagnostics'),invoke<Provider[]>('provider_statuses')]);document.querySelector('#content')!.innerHTML=`<section class="page"><div class="diagnostic-summary"><b>${p.filter(x=>x.detected).length}/${p.length}</b><span>providers detectados</span></div><div class="diag-list">${d.map(x=>`<div class="${x.level}"><b>${esc(x.area)}</b><span>${esc(x.message)}</span></div>`).join('')}${p.map(x=>`<div class="${x.detected?'ok':'info'}"><b>${esc(x.name)}</b><span>${esc(x.message)}${x.root_path?` · ${esc(x.root_path)}`:''}</span></div>`).join('')}</div><button id="copy-diag" class="ghost">Copiar diagnóstico</button></section>`;(document.querySelector('#copy-diag') as HTMLButtonElement).onclick=()=>navigator.clipboard.writeText(JSON.stringify({diagnostics:d,providers:p},null,2)).then(()=>toast('Diagnóstico copiado.'))}
+async function renderView(){if(['library','recent','favorites','installed'].includes(view))renderLibrary();else if(view==='collections')await renderCollections();else if(view==='emulation')await renderEmulation();else if(view==='stats')await renderStats();else if(view==='settings')await renderSettings();else if(view==='diagnostics')await renderDiagnostics()}
+async function refresh(keep=false){games=await invoke<Game[]>('list_games');if(!keep&&!selected)selected=games[0]?.id||null;await renderView()}
+function toast(message:string,error=false){let t=document.querySelector<HTMLDivElement>('#toast');if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t)}t.textContent=message;t.className=error?'error':'';t.classList.add('show');setTimeout(()=>t?.classList.remove('show'),3200)}
 
-function setView(view: 'library' | 'settings') {
-  currentView = view;
-  document.querySelector('#library-view')!.classList.toggle('hidden', view !== 'library');
-  document.querySelector('#settings-view')!.classList.toggle('hidden', view !== 'settings');
-  document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  if (view === 'settings') void loadSteamStatus();
-}
-
-document.querySelector<HTMLInputElement>('#search')!.addEventListener('input', (event) => render((event.target as HTMLInputElement).value));
-
-document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((button) => {
-  button.addEventListener('click', () => setView(button.dataset.view as 'library' | 'settings'));
-});
-
-document.querySelector<HTMLButtonElement>('#add-game')!.addEventListener('click', async () => {
-  const title = window.prompt('Nome do jogo');
-  if (!title?.trim()) return;
-  const platform = window.prompt('Plataforma', 'PC')?.trim() || 'PC';
-  const executable = window.prompt('Executável completo (opcional)', '')?.trim() || null;
-  const workingDir = executable ? (window.prompt('Diretório de trabalho (opcional)', '')?.trim() || null) : null;
-  const launchArgs = executable ? (window.prompt('Argumentos de inicialização (opcional)', '')?.trim() || null) : null;
-  try {
-    await invoke('add_manual_game', { title: title.trim(), platform, executable, workingDir, launchArgs });
-    await loadGames();
-  } catch (error) {
-    window.alert(`Não foi possível adicionar o jogo: ${String(error)}`);
-  }
-});
-
-document.querySelector<HTMLButtonElement>('#play-game')!.addEventListener('click', async () => {
-  if (!selectedId) return;
-  const button = document.querySelector<HTMLButtonElement>('#play-game')!;
-  const message = document.querySelector('#launch-message')!;
-  button.disabled = true;
-  try {
-    const result = await invoke<LaunchResult>('launch_game', { gameId: selectedId });
-    message.textContent = result.message;
-    message.classList.remove('hidden');
-  } catch (error) {
-    message.textContent = String(error);
-    message.classList.remove('hidden');
-    button.disabled = false;
-  }
-});
-
-document.querySelector<HTMLButtonElement>('#sync-steam')!.addEventListener('click', async () => {
-  const button = document.querySelector<HTMLButtonElement>('#sync-steam')!;
-  const resultText = document.querySelector('#steam-result')!;
-  button.disabled = true;
-  button.textContent = 'Sincronizando…';
-  try {
-    const result = await invoke<SteamImportResult>('sync_steam');
-    resultText.textContent = `${result.games_found} encontrados · ${result.games_created} novos · ${result.deduplicated} associados a jogos existentes.`;
-    await Promise.all([loadGames(true), loadSteamStatus()]);
-  } catch (error) {
-    resultText.textContent = `Falha: ${String(error)}`;
-  } finally {
-    button.textContent = 'Atualizar biblioteca Steam';
-    button.disabled = false;
-  }
-});
-
-void loadGames();
-window.setInterval(() => {
-  if (currentView === 'library') void loadGames(true);
-}, 5000);
+shell();void refresh();window.setInterval(()=>{if(['library','recent','favorites','installed'].includes(view))void refresh(true)},5000);
