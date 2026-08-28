@@ -80,6 +80,14 @@ pub fn open(path: &Path) -> Result<Connection, String> {
          CREATE INDEX IF NOT EXISTS idx_sessions_game_started ON play_sessions(game_id, started_at DESC);
          CREATE INDEX IF NOT EXISTS idx_sessions_installation ON play_sessions(installation_id);
          CREATE INDEX IF NOT EXISTS idx_sessions_started ON play_sessions(started_at DESC);
+         CREATE TABLE IF NOT EXISTS imported_playtime (
+           game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+           provider TEXT NOT NULL,
+           seconds INTEGER NOT NULL DEFAULT 0,
+           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           PRIMARY KEY(game_id, provider)
+         );
+         CREATE INDEX IF NOT EXISTS idx_imported_playtime_game ON imported_playtime(game_id);
          CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
          CREATE TABLE IF NOT EXISTS collection_games (
            collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
