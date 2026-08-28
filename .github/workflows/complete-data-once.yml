@@ -1,0 +1,10 @@
+name: complete-data-helper-disabled
+
+on:
+  workflow_dispatch:
+
+jobs:
+  completed:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Data-layer migration helper already applied; kept disabled for audit history."

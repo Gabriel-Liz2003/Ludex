@@ -1,0 +1,10 @@
+name: finalize-features-helper-disabled
+
+on:
+  workflow_dispatch:
+
+jobs:
+  completed:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Final user feature helper already applied; kept disabled for audit history."
