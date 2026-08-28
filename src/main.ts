@@ -13,7 +13,7 @@ type Stats={library_games:number;installed_games:number;never_played:number;trac
 type Diagnostic={level:string;area:string;message:string};
 
 const app=document.querySelector<HTMLDivElement>('#app')!;
-let games:Game[]=[];let selected:string|null=null;let details:Details|null=null;let view='library';let mode:<'grid'|'list'>='grid';let query='';let filter='all';let sort='title';
+let games:Game[]=[];let selected:string|null=null;let details:Details|null=null;let view='library';let mode:'grid'|'list'='grid';let query='';let filter='all';let sort='title';
 const esc=(v:string)=>v.replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]!));
 const dur=(s:number)=>{if(!s)return '0 min';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}min`:`${m}min`};
 const date=(v:string|null)=>v?new Date(v).toLocaleString('pt-BR'):'Nunca';

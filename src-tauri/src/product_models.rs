@@ -54,10 +54,16 @@ pub struct RomRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TimeBucket { pub label: String, pub seconds: i64 }
+pub struct TimeBucket {
+    pub label: String,
+    pub seconds: i64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NamedTime { pub name: String, pub seconds: i64 }
+pub struct NamedTime {
+    pub name: String,
+    pub seconds: i64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LibraryStats {
@@ -93,7 +99,11 @@ pub struct RomScanResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncSummary { pub inserted: usize, pub updated: usize, pub skipped: usize }
+pub struct SyncSummary {
+    pub inserted: usize,
+    pub updated: usize,
+    pub skipped: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupEnvelope {
