@@ -435,11 +435,11 @@ pub fn spawn_for_launch(
     });
 }
 
-fn load_steam_installations(db_path: &Path) -> Result<Vec<Installation>, String> {
+fn load_external_installations(db_path: &Path) -> Result<Vec<Installation>, String> {
     let connection = open_db(db_path)?;
     let mut statement = connection.prepare(
         "SELECT id, game_id, provider, external_id, executable, install_dir, working_dir, launch_args, installed
-         FROM installations WHERE provider='steam' AND installed=1 AND install_dir IS NOT NULL",
+         FROM installations WHERE provider IN ('steam','epic','gog','ea','ubisoft') AND installed=1 AND install_dir IS NOT NULL",
     ).map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |row| {
@@ -495,7 +495,7 @@ fn spawn_external_confirmation(
             &metadata,
         ) {
             Ok(Some(session_id)) => {
-                info!(event="external_game_detected", game_id=%installation.game_id, installation_id=%installation.id, pid=current.pid, "Jogo Steam iniciado externamente detectado");
+                info!(event="external_game_detected", game_id=%installation.game_id, installation_id=%installation.id, pid=current.pid, "Jogo iniciado externamente detectado");
                 let _ = persist_members(&db_path, &session_id, std::slice::from_ref(&current));
                 track_session(db_path, installation, session_id, current, started_unix);
             }
@@ -520,7 +520,7 @@ pub fn spawn_external_detector(db_path: PathBuf) {
                 .collect::<Vec<_>>();
 
             if !new_processes.is_empty() {
-                if let Ok(installations) = load_steam_installations(&db_path) {
+                if let Ok(installations) = load_external_installations(&db_path) {
                     for installation in installations {
                         if has_launch_intent(&installation.id) {
                             continue;

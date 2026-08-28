@@ -375,9 +375,10 @@ pub fn import_installations(
     }
 
     let now = Utc::now().to_rfc3339();
+    let sync_key = format!("{provider}.last_sync");
     connection.execute(
-        "INSERT INTO settings(key, value) VALUES ('steam.last_sync', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [&now],
+        "INSERT INTO settings(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![sync_key, now],
     ).map_err(|e| e.to_string())?;
 
     Ok(SteamImportResult {

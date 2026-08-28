@@ -48,12 +48,12 @@ pub fn migrate(c: &Connection) -> Result<(), String> {
     "#).map_err(|e|e.to_string())?;
     ensure_column(c, "collections", "kind", "TEXT NOT NULL DEFAULT 'manual'")?;
     ensure_column(c, "collections", "filter_json", "TEXT")?;
-    ensure_column(
-        c,
-        "collections",
-        "updated_at",
-        "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
-    )?;
+    ensure_column(c, "collections", "updated_at", "TEXT")?;
+    c.execute(
+        "UPDATE collections SET updated_at=CURRENT_TIMESTAMP WHERE updated_at IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     ensure_column(c, "emulators", "extensions", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(c, "emulators", "core", "TEXT")?;
     ensure_column(c, "emulators", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
@@ -61,12 +61,12 @@ pub fn migrate(c: &Connection) -> Result<(), String> {
     ensure_column(c, "roms", "size_bytes", "INTEGER")?;
     ensure_column(c, "roms", "launch_args", "TEXT")?;
     ensure_column(c, "roms", "core", "TEXT")?;
-    ensure_column(
-        c,
-        "roms",
-        "updated_at",
-        "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
-    )?;
+    ensure_column(c, "roms", "updated_at", "TEXT")?;
+    c.execute(
+        "UPDATE roms SET updated_at=CURRENT_TIMESTAMP WHERE updated_at IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS idx_rom_hash ON roms(hash_sha256) WHERE hash_sha256 IS NOT NULL; INSERT OR IGNORE INTO schema_migrations(version) VALUES(2);").map_err(|e|e.to_string())?;
     Ok(())
 }
@@ -182,18 +182,20 @@ pub fn set_collection_game(c: &Connection, col: &str, game: &str, add: bool) -> 
 }
 pub fn collections(c: &Connection) -> Result<Vec<CollectionRecord>, String> {
     let mut s=c.prepare("SELECT c.id,c.name,c.kind,c.filter_json,COUNT(cg.game_id) FROM collections c LEFT JOIN collection_games cg ON cg.collection_id=c.id GROUP BY c.id ORDER BY c.name COLLATE NOCASE").map_err(|e|e.to_string())?;
-    s.query_map([], |r| {
-        Ok(CollectionRecord {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            kind: r.get(2)?,
-            filter_json: r.get(3)?,
-            game_count: r.get(4)?,
+    let result = s
+        .query_map([], |r| {
+            Ok(CollectionRecord {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                kind: r.get(2)?,
+                filter_json: r.get(3)?,
+                game_count: r.get(4)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string());
+    result
 }
 
 pub fn merge_games(c: &mut Connection, target: &str, source: &str) -> Result<(), String> {
@@ -244,24 +246,26 @@ VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET name=ex
 }
 pub fn emulators(c: &Connection) -> Result<Vec<EmulatorRecord>, String> {
     let mut s=c.prepare("SELECT id,name,platform,executable,arguments_template,rom_directory,bios_directory,saves_directory,extensions,core,enabled FROM emulators ORDER BY platform,name").map_err(|e|e.to_string())?;
-    s.query_map([], |r| {
-        Ok(EmulatorRecord {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            platform: r.get(2)?,
-            executable: r.get(3)?,
-            arguments_template: r.get(4)?,
-            rom_directory: r.get(5)?,
-            bios_directory: r.get(6)?,
-            saves_directory: r.get(7)?,
-            extensions: r.get(8)?,
-            core: r.get(9)?,
-            enabled: r.get::<_, i64>(10)? != 0,
+    let result = s
+        .query_map([], |r| {
+            Ok(EmulatorRecord {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                platform: r.get(2)?,
+                executable: r.get(3)?,
+                arguments_template: r.get(4)?,
+                rom_directory: r.get(5)?,
+                bios_directory: r.get(6)?,
+                saves_directory: r.get(7)?,
+                extensions: r.get(8)?,
+                core: r.get(9)?,
+                enabled: r.get::<_, i64>(10)? != 0,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string());
+    result
 }
 
 fn allowed_extension(ext: &str) -> bool {
@@ -369,48 +373,54 @@ pub fn scan_roms(
 }
 pub fn roms(c: &Connection) -> Result<Vec<RomRecord>, String> {
     let mut s=c.prepare("SELECT r.id,r.game_id,g.title,r.platform,r.path,r.emulator_id,r.hash_sha256,r.size_bytes,r.launch_args,r.core FROM roms r JOIN games g ON g.id=r.game_id ORDER BY g.title").map_err(|e|e.to_string())?;
-    s.query_map([], |r| {
-        Ok(RomRecord {
-            id: r.get(0)?,
-            game_id: r.get(1)?,
-            title: r.get(2)?,
-            platform: r.get(3)?,
-            path: r.get(4)?,
-            emulator_id: r.get(5)?,
-            hash_sha256: r.get(6)?,
-            size_bytes: r.get(7)?,
-            launch_args: r.get(8)?,
-            core: r.get(9)?,
+    let result = s
+        .query_map([], |r| {
+            Ok(RomRecord {
+                id: r.get(0)?,
+                game_id: r.get(1)?,
+                title: r.get(2)?,
+                platform: r.get(3)?,
+                path: r.get(4)?,
+                emulator_id: r.get(5)?,
+                hash_sha256: r.get(6)?,
+                size_bytes: r.get(7)?,
+                launch_args: r.get(8)?,
+                core: r.get(9)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string());
+    result
 }
 
 fn named_times(c: &Connection, sql: &str) -> Result<Vec<NamedTime>, String> {
     let mut s = c.prepare(sql).map_err(|e| e.to_string())?;
-    s.query_map([], |r| {
-        Ok(NamedTime {
-            name: r.get(0)?,
-            seconds: r.get(1)?,
+    let result = s
+        .query_map([], |r| {
+            Ok(NamedTime {
+                name: r.get(0)?,
+                seconds: r.get(1)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string());
+    result
 }
 fn buckets(c: &Connection, sql: &str) -> Result<Vec<TimeBucket>, String> {
     let mut s = c.prepare(sql).map_err(|e| e.to_string())?;
-    s.query_map([], |r| {
-        Ok(TimeBucket {
-            label: r.get(0)?,
-            seconds: r.get(1)?,
+    let result = s
+        .query_map([], |r| {
+            Ok(TimeBucket {
+                label: r.get(0)?,
+                seconds: r.get(1)?,
+            })
         })
-    })
-    .map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string());
+    result
 }
 pub fn library_stats(c: &Connection) -> Result<LibraryStats, String> {
     let q = |sql: &str| {
