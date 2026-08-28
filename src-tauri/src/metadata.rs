@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use rusqlite::{params, Connection};
 
@@ -66,7 +69,9 @@ impl MetadataProvider for SteamLocalMetadataProvider {
             )
             .map_err(|e| e.to_string())?;
         let rows = statement
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
@@ -135,7 +140,13 @@ fn collect_candidates(directory: &Path, app_id: &str, depth: usize, out: &mut Ve
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value == app_id)
         {
-            if matches!(path.extension().and_then(|value| value.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("jpg" | "jpeg" | "png" | "webp")) {
+            if matches!(
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("jpg" | "jpeg" | "png" | "webp")
+            ) {
                 out.push(path);
             }
         }

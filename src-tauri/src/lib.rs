@@ -1,6 +1,7 @@
 mod db;
 mod emulation;
 mod identity;
+mod metadata;
 mod models;
 mod process_monitor;
 mod product;
@@ -14,8 +15,8 @@ use models::{
 };
 use process_monitor::ProcessMonitor;
 use product_models::{
-    CollectionRecord, DiagnosticItem, EmulatorRecord, LibraryStats, MetadataRecord, RomRecord,
-    RomScanResult, SyncSummary,
+    CollectionMembership, CollectionRecord, DiagnosticItem, EmulatorRecord, LibraryStats,
+    MetadataRecord, RomRecord, RomScanResult, SaveBackupRecord, SyncSummary,
 };
 use providers::steam::SteamProvider;
 use std::{
@@ -125,7 +126,11 @@ async fn sync_provider(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
         let c = open_product(&path)?;
-        product::sync_provider(&c, &provider, &scan.installations, &root)
+        let result = product::sync_provider(&c, &provider, &scan.installations, &root)?;
+        if provider == "steam" {
+            let _ = metadata::refresh_local_metadata(&c);
+        }
+        Ok(result)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -309,6 +314,14 @@ fn save_metadata(
     product::update_metadata(&open_product(&state.db_path)?, &metadata)
 }
 #[tauri::command]
+fn collection_memberships(
+    state: tauri::State<'_, AppState>,
+    game_id: String,
+) -> Result<Vec<CollectionMembership>, String> {
+    product::collection_memberships(&open_product(&state.db_path)?, &game_id)
+}
+
+#[tauri::command]
 fn list_collections(state: tauri::State<'_, AppState>) -> Result<Vec<CollectionRecord>, String> {
     product::collections(&open_product(&state.db_path)?)
 }
@@ -453,6 +466,32 @@ fn backup_database(state: tauri::State<'_, AppState>) -> Result<String, String> 
     product::create_db_backup(&state.db_path, &state.data_dir.join("backups"))
 }
 #[tauri::command]
+fn refresh_local_metadata(state: tauri::State<'_, AppState>) -> Result<usize, String> {
+    metadata::refresh_local_metadata(&open_product(&state.db_path)?)
+}
+#[tauri::command]
+fn backup_save_path(
+    state: tauri::State<'_, AppState>,
+    source: String,
+    emulator_id: Option<String>,
+) -> Result<SaveBackupRecord, String> {
+    product::backup_save_path(
+        &open_product(&state.db_path)?,
+        &source,
+        &state.data_dir.join("save-backups"),
+        emulator_id.as_deref(),
+    )
+}
+#[tauri::command]
+fn list_save_backups(state: tauri::State<'_, AppState>) -> Result<Vec<SaveBackupRecord>, String> {
+    product::save_backups(&open_product(&state.db_path)?)
+}
+#[tauri::command]
+fn restore_save_backup(state: tauri::State<'_, AppState>, backup_id: String) -> Result<(), String> {
+    product::restore_save_backup(&open_product(&state.db_path)?, &backup_id)
+}
+
+#[tauri::command]
 fn diagnostics(state: tauri::State<'_, AppState>) -> Result<Vec<DiagnosticItem>, String> {
     product::diagnostics(&open_product(&state.db_path)?)
 }
@@ -489,6 +528,7 @@ pub fn run() {
             set_game_status,
             get_metadata,
             save_metadata,
+            collection_memberships,
             list_collections,
             create_collection,
             rename_collection,
@@ -505,6 +545,10 @@ pub fn run() {
             library_stats,
             export_backup_json,
             import_sync_json,
+            backup_save_path,
+            list_save_backups,
+            restore_save_backup,
+            refresh_local_metadata,
             backup_database,
             diagnostics
         ])
