@@ -7,8 +7,11 @@ mod process_monitor;
 mod product;
 mod product_models;
 mod providers;
+mod secrets;
 mod sessions;
+mod steam_account;
 mod steam_data;
+mod store;
 mod updater;
 
 use models::{
@@ -131,6 +134,9 @@ async fn sync_provider(
         let result = product::sync_provider(&c, &provider, &scan.installations, &root)?;
         if provider == "steam" {
             let _ = steam_data::sync(&c)?;
+            if crate::secrets::configured(&c, "steam.web_api_key")? {
+                let _ = steam_account::sync_owned_games(&c);
+            }
         }
         Ok(result)
     })
@@ -502,6 +508,83 @@ fn diagnostics(state: tauri::State<'_, AppState>) -> Result<Vec<DiagnosticItem>,
 fn load_local_artwork(path: String) -> Result<String, String> {
     steam_data::load_local_artwork(&path)
 }
+#[tauri::command]
+fn resolve_artwork(value: String) -> Result<String, String> {
+    steam_data::resolve_artwork(&value)
+}
+#[tauri::command]
+fn steam_account_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<steam_account::SteamAccountStatus, String> {
+    steam_account::status(&open_product(&state.db_path)?)
+}
+#[tauri::command]
+fn save_steam_web_api_key(state: tauri::State<'_, AppState>, key: String) -> Result<(), String> {
+    steam_account::save_api_key(&open_product(&state.db_path)?, &key)
+}
+#[tauri::command]
+async fn sync_steam_account(
+    state: tauri::State<'_, AppState>,
+) -> Result<steam_account::SteamAccountSyncResult, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        steam_account::sync_owned_games(&open_product(&path)?)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn store_settings(state: tauri::State<'_, AppState>) -> Result<store::StoreSettingsStatus, String> {
+    store::settings(&open_product(&state.db_path)?)
+}
+#[tauri::command]
+fn save_store_settings(
+    state: tauri::State<'_, AppState>,
+    ggdeals_key: Option<String>,
+    itad_key: Option<String>,
+    country: String,
+) -> Result<(), String> {
+    store::save_keys(
+        &open_product(&state.db_path)?,
+        ggdeals_key.as_deref(),
+        itad_key.as_deref(),
+        &country,
+    )
+}
+#[tauri::command]
+async fn store_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<store::StoreCatalogItem>, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || store::catalog(&open_product(&path)?))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn store_compare(
+    state: tauri::State<'_, AppState>,
+    app_id: String,
+) -> Result<store::StoreComparison, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || store::compare(&open_product(&path)?, &app_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let allowed = [
+        "https://store.steampowered.com/",
+        "https://steamcommunity.com/",
+        "https://gg.deals/",
+        "https://isthereanydeal.com/",
+        "https://next.isthereanydeal.com/",
+        "https://docs.isthereanydeal.com/",
+    ];
+    if !allowed.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err("Domínio externo não permitido".into());
+    }
+    open_uri(&url)
+}
 
 #[tauri::command]
 async fn check_for_updates() -> Result<updater::UpdateInfo, String> {
@@ -581,6 +664,15 @@ pub fn run() {
             backup_database,
             diagnostics,
             load_local_artwork,
+            resolve_artwork,
+            steam_account_status,
+            save_steam_web_api_key,
+            sync_steam_account,
+            store_settings,
+            save_store_settings,
+            store_catalog,
+            store_compare,
+            open_external_url,
             check_for_updates,
             install_update
         ])

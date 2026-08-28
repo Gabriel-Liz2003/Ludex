@@ -15,13 +15,13 @@ pub trait MetadataProvider: Send + Sync {
 pub struct SteamLocalMetadataProvider;
 
 #[derive(Default)]
-struct SteamArtwork {
-    cover: Option<String>,
-    hero: Option<String>,
+pub(crate) struct SteamArtwork {
+    pub cover: Option<String>,
+    pub hero: Option<String>,
 }
 
 impl SteamLocalMetadataProvider {
-    fn artwork_for(root: &Path, app_id: &str) -> SteamArtwork {
+    pub(crate) fn artwork_for(root: &Path, app_id: &str) -> SteamArtwork {
         let cache = root.join("appcache").join("librarycache");
         let mut files = Vec::new();
         collect_candidates(&cache, app_id, 3, &mut files);
@@ -34,6 +34,7 @@ impl SteamLocalMetadataProvider {
             let value = path.to_string_lossy().to_string();
             if artwork.cover.is_none()
                 && (lower.contains("library_600x900")
+                    || lower.contains("library_capsule")
                     || lower.contains("portrait")
                     || lower.contains("capsule_600x900"))
             {
@@ -101,6 +102,12 @@ impl MetadataProvider for SteamLocalMetadataProvider {
     }
 }
 
+pub(crate) fn steam_artwork_for(app_id: &str) -> SteamArtwork {
+    SteamProvider::detect_root()
+        .map(|root| SteamLocalMetadataProvider::artwork_for(&root, app_id))
+        .unwrap_or_default()
+}
+
 pub fn refresh_local_metadata(connection: &Connection) -> Result<usize, String> {
     let providers: [&dyn MetadataProvider; 1] = [&SteamLocalMetadataProvider];
     let mut updated = 0usize;
@@ -164,12 +171,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ludex-metadata-{}", Uuid::new_v4()));
         let app = root.join("1091500");
         fs::create_dir_all(&app).unwrap();
-        fs::write(app.join("library_600x900.jpg"), b"x").unwrap();
+        fs::write(app.join("library_capsule.jpg"), b"x").unwrap();
         fs::write(root.join("other.jpg"), b"x").unwrap();
         let mut files: Vec<PathBuf> = Vec::new();
         collect_candidates(&root, "1091500", 3, &mut files);
         assert_eq!(files.len(), 1);
-        assert!(files[0].ends_with("library_600x900.jpg"));
+        assert!(files[0].ends_with("library_capsule.jpg"));
         let _ = fs::remove_dir_all(root);
     }
 }

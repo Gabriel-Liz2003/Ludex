@@ -142,3 +142,11 @@ A partir da versão 0.9.1, o Desktop Windows consulta as Releases oficiais deste
 
 A versão 0.9.1 também enriquece a importação Steam sem exigir chave de API: o Ludex lê o `localconfig.vdf` da conta Steam local mais recentemente usada para importar `Playtime` e usa primeiro o artwork local do cache, com fallback para o CDN oficial da Steam.
 
+
+
+## 0.9.2
+
+- Steam: corrige artwork moderno (`library_capsule`) e adiciona resolver com fallback seguro.
+- Steam Account: importação opcional da biblioteca completa via `IPlayerService/GetOwnedGames`, incluindo jogos não instalados e playtime histórico. A chave é fornecida pelo usuário e protegida com DPAPI no Windows.
+- Loja: catálogo Steam para o Brasil, preço Steam, ofertas individuais de lojas oficiais via IsThereAnyDeal e melhor preço de lojas/keyshops via GG.deals. Sem scraping de marketplaces.
+- Eneba/Instant Gaming: APIs públicas de consumidor não estão disponíveis; quando cobertas pelo GG.deals entram no comparador agregado e no link detalhado.
