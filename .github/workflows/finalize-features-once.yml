@@ -1,23 +1,10 @@
-name: finalize-features-once
+name: finalize-features-helper-disabled
+
 on:
-  push:
-    branches: ["feat/ludex-foundation"]
-permissions:
-  contents: write
+  workflow_dispatch:
+
 jobs:
-  finalize:
-    if: ${{ !contains(github.event.head_commit.message, '[finalize-features]') }}
+  completed:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { ref: feat/ludex-foundation }
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: rustfmt }
-      - run: python scripts/finalize-user-features.py
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/main.ts src-tauri/src
-          git commit -m "feat: wire collections save backups and local metadata [finalize-features]" || exit 0
-          git push origin HEAD:feat/ludex-foundation
+      - run: echo "Final user feature helper already applied; kept disabled for audit history."
