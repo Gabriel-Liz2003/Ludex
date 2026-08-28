@@ -14,6 +14,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: rustfmt }
       - run: python scripts/complete-data-layer.py
+      - name: Repair generated session delimiter
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src-tauri/src/product.rs')
+          t = p.read_text(encoding='utf-8')
+          needle = '    }}\n    if let Some(items)=data.get("metadata")'
+          replacement = '    }\n    if let Some(items)=data.get("metadata")'
+          if needle not in t:
+              raise SystemExit('generated sessions delimiter pattern not found')
+          p.write_text(t.replace(needle, replacement, 1), encoding='utf-8')
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml
       - run: |
           git config user.name "github-actions[bot]"
