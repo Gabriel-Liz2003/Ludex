@@ -1,38 +1,148 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rusqlite::{params, Connection};
 
-const CREDENTIAL_MARKER: &str = "windows-credential-manager-v1";
+const CREDENTIAL_MANAGER_MARKER: &str = "windows-credential-manager-v1";
 
 fn setting_key(name: &str) -> String {
     format!("secret.{name}")
 }
 
 #[cfg(windows)]
-fn credential_entry(name: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("Ludex", name)
-        .map_err(|e| format!("Falha ao abrir o Gerenciador de Credenciais do Windows: {e}"))
+mod native_dpapi {
+    use super::*;
+    use std::{ffi::c_void, ptr};
+
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+
+    #[repr(C)]
+    struct DataBlob {
+        cb_data: u32,
+        pb_data: *mut u8,
+    }
+
+    #[link(name = "Crypt32")]
+    extern "system" {
+        fn CryptProtectData(
+            data_in: *mut DataBlob,
+            description: *const u16,
+            optional_entropy: *mut DataBlob,
+            reserved: *mut c_void,
+            prompt: *mut c_void,
+            flags: u32,
+            data_out: *mut DataBlob,
+        ) -> i32;
+        fn CryptUnprotectData(
+            data_in: *mut DataBlob,
+            description: *mut *mut u16,
+            optional_entropy: *mut DataBlob,
+            reserved: *mut c_void,
+            prompt: *mut c_void,
+            flags: u32,
+            data_out: *mut DataBlob,
+        ) -> i32;
+    }
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    }
+
+    pub fn protect(value: &str) -> Result<String, String> {
+        let mut bytes = value.as_bytes().to_vec();
+        let mut input = DataBlob {
+            cb_data: bytes.len() as u32,
+            pb_data: bytes.as_mut_ptr(),
+        };
+        let mut output = DataBlob {
+            cb_data: 0,
+            pb_data: ptr::null_mut(),
+        };
+
+        let ok = unsafe {
+            CryptProtectData(
+                &mut input,
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut output,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "O Windows não conseguiu proteger a credencial: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let protected = unsafe {
+            let slice = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize);
+            let encoded = STANDARD.encode(slice);
+            LocalFree(output.pb_data.cast());
+            encoded
+        };
+        Ok(protected)
+    }
+
+    pub fn unprotect(value: &str) -> Result<String, String> {
+        let mut bytes = STANDARD
+            .decode(value)
+            .map_err(|_| "Credencial protegida inválida".to_string())?;
+        let mut input = DataBlob {
+            cb_data: bytes.len() as u32,
+            pb_data: bytes.as_mut_ptr(),
+        };
+        let mut output = DataBlob {
+            cb_data: 0,
+            pb_data: ptr::null_mut(),
+        };
+
+        let ok = unsafe {
+            CryptUnprotectData(
+                &mut input,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut output,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "O Windows não conseguiu desbloquear a credencial deste usuário: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let plain = unsafe {
+            let slice = std::slice::from_raw_parts(output.pb_data, output.cb_data as usize);
+            let text = String::from_utf8(slice.to_vec()).map_err(|e| e.to_string());
+            LocalFree(output.pb_data.cast());
+            text?
+        };
+        Ok(plain)
+    }
 }
 
 #[cfg(windows)]
-fn store_secure(name: &str, value: &str) -> Result<(), String> {
-    credential_entry(name)?
-        .set_password(value)
-        .map_err(|e| format!("O Windows recusou salvar a credencial com segurança: {e}"))
+fn protect(value: &str) -> Result<String, String> {
+    native_dpapi::protect(value)
 }
 
 #[cfg(windows)]
-fn load_secure(name: &str) -> Result<String, String> {
-    credential_entry(name)?
-        .get_password()
-        .map_err(|e| format!("Não foi possível ler a credencial deste usuário do Windows: {e}"))
+fn unprotect(value: &str) -> Result<String, String> {
+    native_dpapi::unprotect(value)
 }
 
 #[cfg(not(windows))]
-fn store_secure(_name: &str, _value: &str) -> Result<(), String> {
+fn protect(_value: &str) -> Result<String, String> {
     Err("O armazenamento protegido de credenciais está disponível no Desktop Windows".into())
 }
 
 #[cfg(not(windows))]
-fn load_secure(_name: &str) -> Result<String, String> {
+fn unprotect(_value: &str) -> Result<String, String> {
     Err("O armazenamento protegido de credenciais está disponível no Desktop Windows".into())
 }
 
@@ -46,13 +156,11 @@ pub fn set(connection: &Connection, name: &str, value: &str) -> Result<(), Strin
         return Ok(());
     }
 
-    // Never persist the API key itself in SQLite. Windows Credential Manager stores it
-    // under the current Windows user and SQLite only keeps a non-secret marker.
-    store_secure(name, value)?;
+    let encrypted = protect(value)?;
     connection
         .execute(
             "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![key, CREDENTIAL_MARKER],
+            params![key, encrypted],
         )
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -63,20 +171,22 @@ pub fn get(connection: &Connection, name: &str) -> Result<Option<String>, String
         return Ok(None);
     };
 
-    if value == CREDENTIAL_MARKER {
-        return load_secure(name).map(Some);
+    // 0.9.3 could leave a SQLite marker even if Windows Credential Manager later
+    // failed to return the entry. Treat that stale state as unconfigured instead of
+    // breaking the settings/store pages. Saving the key again migrates it to DPAPI.
+    if value == CREDENTIAL_MANAGER_MARKER {
+        return Ok(None);
     }
 
-    // 0.9.2 stored a DPAPI payload directly in SQLite. We intentionally do not attempt
-    // to decrypt it through PowerShell anymore because that was the source of the
-    // compatibility failure fixed in 0.9.3. Asking the user to save the key once more
-    // migrates it to Windows Credential Manager safely.
-    Err("Esta credencial foi salva pelo formato 0.9.2. Salve a chave novamente para migrá-la ao Gerenciador de Credenciais do Windows.".into())
+    unprotect(&value).map(Some)
 }
 
 pub fn configured(connection: &Connection, name: &str) -> Result<bool, String> {
-    Ok(
-        crate::db::get_setting(connection, &setting_key(name))?.as_deref()
-            == Some(CREDENTIAL_MARKER),
-    )
+    let Some(value) = crate::db::get_setting(connection, &setting_key(name))? else {
+        return Ok(false);
+    };
+    if value == CREDENTIAL_MANAGER_MARKER {
+        return Ok(false);
+    }
+    Ok(unprotect(&value).is_ok())
 }
