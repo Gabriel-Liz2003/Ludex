@@ -75,7 +75,8 @@ pub fn get(connection: &Connection, name: &str) -> Result<Option<String>, String
 }
 
 pub fn configured(connection: &Connection, name: &str) -> Result<bool, String> {
-    Ok(crate::db::get_setting(connection, &setting_key(name))?
-        .as_deref()
-        == Some(CREDENTIAL_MARKER))
+    Ok(
+        crate::db::get_setting(connection, &setting_key(name))?.as_deref()
+            == Some(CREDENTIAL_MARKER),
+    )
 }
