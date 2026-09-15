@@ -10,5 +10,9 @@
    <com.google.android.material.button.MaterialButton android:id="@+id/emu_open" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Abrir emulador"/>
    <com.google.android.material.button.MaterialButton android:id="@+id/emu_rom" style="@style/Widget.Material3.Button.OutlinedButton" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Escolher ROM"/>
   </LinearLayout>
+  <com.google.android.material.button.MaterialButton android:id="@+id/emu_library"
+   style="@style/Widget.Material3.Button.OutlinedButton" android:layout_width="match_parent"
+   android:layout_height="wrap_content" android:layout_marginTop="8dp"
+   android:text="Importar jogos instalados" android:visibility="gone"/>
  </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

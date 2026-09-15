@@ -10,12 +10,12 @@ import java.util.*;
 public final class LudexDb extends SQLiteOpenHelper {
     public static final class GameRow {
         public String id,title,platform,source,packageName,status;
-        public boolean installed,favorite;
+        public boolean installed,favorite,gameNative;
         public long seconds,updatedAt;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,5);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,6);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -23,6 +23,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE imported_playtime(game_id TEXT NOT NULL,provider TEXT NOT NULL,seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(game_id,provider))");
         db.execSQL("CREATE INDEX idx_imported_playtime_game ON imported_playtime(game_id)");
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
+        db.execSQL("CREATE TABLE gamenative_games(game_id TEXT PRIMARY KEY,provider TEXT NOT NULL,external_id TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
         if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");
@@ -31,6 +32,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             db.execSQL("CREATE TABLE IF NOT EXISTS imported_playtime(game_id TEXT NOT NULL,provider TEXT NOT NULL,seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(game_id,provider))");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_imported_playtime_game ON imported_playtime(game_id)");
         }
+        if(oldV<6)db.execSQL("CREATE TABLE IF NOT EXISTS gamenative_games(game_id TEXT PRIMARY KEY,provider TEXT NOT NULL,external_id TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
@@ -45,11 +47,40 @@ public final class LudexDb extends SQLiteOpenHelper {
 
     public List<GameRow> listGames(){
         ArrayList<GameRow> out=new ArrayList<>();
-        String sql="SELECT g.id,g.title,g.platform,g.source,g.package_name,g.installed,g.favorite,g.status,g.updated_at,"+
-            "MAX(COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id),0),COALESCE((SELECT SUM(seconds) FROM imported_playtime p WHERE p.game_id=g.id),0)) total "+
+        String sql="SELECT g.id,g.title,g.platform,g.source,g.package_name,"+
+            "CASE WHEN g.installed=1 OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id) THEN 1 ELSE 0 END,"+
+            "g.favorite,g.status,g.updated_at,"+
+            "MAX(COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id),0),COALESCE((SELECT SUM(seconds) FROM imported_playtime p WHERE p.game_id=g.id),0)) total,"+
+            "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id) "+
             "FROM games g ORDER BY g.title COLLATE NOCASE";
-        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);out.add(g);}}
+        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);g.gameNative=c.getInt(10)!=0;out.add(g);}}
         return out;
+    }
+
+    public int syncGameNativeGames(List<GameNativeScanner.ImportedGame> games){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;
+        try{
+            db.delete("gamenative_games",null,null);
+            ContentValues off=new ContentValues();off.put("installed",0);
+            db.update("games",off,"source='gamenative'",null);
+            long now=System.currentTimeMillis();
+            for(GameNativeScanner.ImportedGame item:games){
+                String gameId=null;
+                try(Cursor cur=db.rawQuery("SELECT id FROM games WHERE source!='android' AND lower(trim(title))=lower(trim(?)) ORDER BY CASE WHEN source='gamenative' THEN 1 ELSE 0 END LIMIT 1",new String[]{item.title})){
+                    if(cur.moveToFirst())gameId=cur.getString(0);
+                }
+                if(gameId==null){
+                    gameId="gamenative:"+item.provider+":"+item.externalId;
+                    ContentValues g=new ContentValues();g.put("id",gameId);g.put("title",item.title);g.put("platform","PC");g.put("source","gamenative");g.put("installed",0);g.put("updated_at",now);
+                    db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+                }
+                ContentValues link=new ContentValues();link.put("game_id",gameId);link.put("provider",item.provider);link.put("external_id",item.externalId);link.put("title",item.title);link.put("updated_at",now);
+                db.insertWithOnConflict("gamenative_games",null,link,SQLiteDatabase.CONFLICT_REPLACE);
+                count++;
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return count;
     }
 
     public void setImportedPlaytime(String game,String provider,long seconds){

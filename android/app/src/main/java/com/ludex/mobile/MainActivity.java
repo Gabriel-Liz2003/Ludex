@@ -41,6 +41,15 @@ public final class MainActivity extends AppCompatActivity {
     private String pendingEmulatorPackage;
     private File pendingUpdateApk;
 
+    private final ActivityResultLauncher<Uri> gameNativeTreeLauncher=registerForActivityResult(
+        new ActivityResultContracts.OpenDocumentTree(), uri -> {
+            if(uri==null)return;
+            try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+            catch(Exception ignored){}
+            db.setSetting("gamenative.tree_uri",uri.toString());
+            syncGameNativeLibrary(uri,true);
+        });
+
     private final ActivityResultLauncher<Intent> importLauncher=registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(), r -> {
             if(r.getResultCode()!=RESULT_OK||r.getData()==null||r.getData().getData()==null)return;
@@ -102,7 +111,7 @@ public final class MainActivity extends AppCompatActivity {
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setItemAnimator(new DefaultItemAnimator());
         gameAdapter=new GameAdapter(this::showGame,this::launchGame);
-        emulatorAdapter=new EmulatorAdapter(this::launchEmulator,this::pickRomFor);
+        emulatorAdapter=new EmulatorAdapter(this::launchEmulator,this::pickRomFor,this::connectEmulatorLibrary);
         list.setAdapter(gameAdapter);
     }
 
@@ -133,6 +142,13 @@ public final class MainActivity extends AppCompatActivity {
             try{
                 scanInstalledGames();
                 if(importUsage&&hasUsageAccess()) importUsage();
+                String gameNativeUri=db.getSetting("gamenative.tree_uri","");
+                if(!gameNativeUri.isEmpty()){
+                    try{
+                        List<GameNativeScanner.ImportedGame> found=GameNativeScanner.scan(this,Uri.parse(gameNativeUri));
+                        db.syncGameNativeGames(found);
+                    }catch(Exception ignored){}
+                }
                 final List<LudexDb.GameRow> games=db.listGames();
                 final List<EmulatorRegistry.Emulator> emulators=EmulatorRegistry.detect(this);
                 runOnUiThread(()->{
@@ -271,7 +287,7 @@ public final class MainActivity extends AppCompatActivity {
                 (g.packageName!=null?"\nApp: "+g.packageName:""))
             .setNeutralButton(g.favorite?"Remover favorito":"Favoritar",(d,w)->{db.setFavorite(g.id,!g.favorite);refreshAsync(false);})
             .setNegativeButton("Mais",(d,w)->showGameActions(g))
-            .setPositiveButton(g.installed&&g.packageName!=null?"JOGAR":"Fechar",(d,w)->{if(g.installed&&g.packageName!=null)launchGame(g);})
+            .setPositiveButton(g.installed&&(g.packageName!=null||g.gameNative)?"JOGAR":"Fechar",(d,w)->{if(g.installed&&(g.packageName!=null||g.gameNative))launchGame(g);})
             .show();
     }
 
@@ -319,8 +335,10 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void launchGame(LudexDb.GameRow g){
-        if(g.packageName==null)return;
-        Intent i=getPackageManager().getLaunchIntentForPackage(g.packageName);
+        String pkg=g.packageName;
+        if(pkg==null&&g.gameNative)pkg=GameNativeScanner.PACKAGE;
+        if(pkg==null)return;
+        Intent i=getPackageManager().getLaunchIntentForPackage(pkg);
         if(i==null){toast("Este jogo não expõe uma activity de inicialização");return;}
         startActivity(i);
     }
@@ -328,6 +346,36 @@ public final class MainActivity extends AppCompatActivity {
     private void launchEmulator(EmulatorRegistry.Emulator e){
         Intent i=getPackageManager().getLaunchIntentForPackage(e.packageName);
         if(i!=null)startActivity(i);else toast("Não foi possível iniciar "+e.name);
+    }
+
+    private void connectEmulatorLibrary(EmulatorRegistry.Emulator e){
+        if(!GameNativeScanner.PACKAGE.equals(e.packageName))return;
+        String saved=db.getSetting("gamenative.tree_uri","");
+        if(saved.isEmpty()){
+            toast("Selecione a pasta GameNative do armazenamento");
+            gameNativeTreeLauncher.launch(null);
+        }else{
+            syncGameNativeLibrary(Uri.parse(saved),true);
+        }
+    }
+
+    private void syncGameNativeLibrary(Uri uri,boolean notify){
+        if(notify)toast("Lendo jogos instalados no GameNative…");
+        io.execute(()->{
+            try{
+                List<GameNativeScanner.ImportedGame> found=GameNativeScanner.scan(this,uri);
+                int count=db.syncGameNativeGames(found);
+                runOnUiThread(()->{
+                    if(notify)toast(count+" jogos do GameNative encontrados");
+                    refreshAsync(false);
+                });
+            }catch(Exception e){
+                runOnUiThread(()->{
+                    db.setSetting("gamenative.tree_uri","");
+                    toast("Não consegui ler a pasta GameNative: "+e.getMessage());
+                });
+            }
+        });
     }
 
     private void pickRomFor(EmulatorRegistry.Emulator e){
@@ -446,10 +494,11 @@ public final class MainActivity extends AppCompatActivity {
         @NonNull public Holder onCreateViewHolder(@NonNull android.view.ViewGroup p,int t){return new Holder(getLayoutInflater().inflate(R.layout.item_game,p,false));}
         public void onBindViewHolder(@NonNull Holder h,int pos){
             LudexDb.GameRow g=shown.get(pos);
-            h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.installed?" · instalado":""));
+            h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.gameNative?" · GameNative":(g.installed?" · instalado":"")));
             h.time.setText(format(g.seconds));h.status.setText(g.favorite?"★ "+g.status:g.status);
-            Drawable icon=g.packageName==null?null:appIcon(g.packageName);h.icon.setImageDrawable(icon);h.icon.setVisibility(icon==null?View.INVISIBLE:View.VISIBLE);
-            h.play.setVisibility(g.installed&&g.packageName!=null?View.VISIBLE:View.GONE);
+            String iconPkg=g.packageName!=null?g.packageName:(g.gameNative?GameNativeScanner.PACKAGE:null);
+            Drawable icon=iconPkg==null?null:appIcon(iconPkg);h.icon.setImageDrawable(icon);h.icon.setVisibility(icon==null?View.INVISIBLE:View.VISIBLE);
+            h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative)?View.VISIBLE:View.GONE);
             h.itemView.setOnClickListener(v->click.click(g));h.play.setOnClickListener(v->launch.click(g));
         }
         public int getItemCount(){return shown.size();}
@@ -462,12 +511,19 @@ public final class MainActivity extends AppCompatActivity {
     final class EmulatorAdapter extends RecyclerView.Adapter<EmulatorAdapter.Holder>{
         interface EClick{void click(EmulatorRegistry.Emulator e);}
         private final ArrayList<EmulatorRegistry.Emulator> items=new ArrayList<>();
-        private final EClick launch,rom;
-        EmulatorAdapter(EClick l,EClick r){launch=l;rom=r;}
+        private final EClick launch,rom,library;
+        EmulatorAdapter(EClick l,EClick r,EClick lib){launch=l;rom=r;library=lib;}
         void setAll(List<EmulatorRegistry.Emulator> x){items.clear();items.addAll(x);notifyDataSetChanged();}
         @NonNull public Holder onCreateViewHolder(@NonNull android.view.ViewGroup p,int t){return new Holder(getLayoutInflater().inflate(R.layout.item_emulator,p,false));}
-        public void onBindViewHolder(@NonNull Holder h,int pos){EmulatorRegistry.Emulator e=items.get(pos);h.name.setText(e.name);h.pkg.setText(e.packageName);h.open.setOnClickListener(v->launch.click(e));h.rom.setOnClickListener(v->rom.click(e));}
+        public void onBindViewHolder(@NonNull Holder h,int pos){
+            EmulatorRegistry.Emulator e=items.get(pos);boolean gameNative=GameNativeScanner.PACKAGE.equals(e.packageName);
+            h.name.setText(e.name);h.pkg.setText(e.packageName);h.open.setOnClickListener(v->launch.click(e));
+            h.rom.setVisibility(gameNative?View.GONE:View.VISIBLE);h.rom.setOnClickListener(v->rom.click(e));
+            h.library.setVisibility(gameNative?View.VISIBLE:View.GONE);
+            h.library.setText(db.getSetting("gamenative.tree_uri","").isEmpty()?"Conectar biblioteca":"Sincronizar jogos");
+            h.library.setOnClickListener(v->library.click(e));
+        }
         public int getItemCount(){return items.size();}
-        final class Holder extends RecyclerView.ViewHolder{TextView name,pkg;Button open,rom;Holder(View v){super(v);name=v.findViewById(R.id.emu_name);pkg=v.findViewById(R.id.emu_pkg);open=v.findViewById(R.id.emu_open);rom=v.findViewById(R.id.emu_rom);}}
+        final class Holder extends RecyclerView.ViewHolder{TextView name,pkg;Button open,rom,library;Holder(View v){super(v);name=v.findViewById(R.id.emu_name);pkg=v.findViewById(R.id.emu_pkg);open=v.findViewById(R.id.emu_open);rom=v.findViewById(R.id.emu_rom);library=v.findViewById(R.id.emu_library);}}
     }
 }
