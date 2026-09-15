@@ -1,0 +1,5 @@
+<resources>
+ <color name="ludex_bg">#090D14</color><color name="ludex_surface">#111824</color><color name="ludex_surface2">#182232</color>
+ <color name="ludex_text">#F4F7FB</color><color name="ludex_muted">#92A1B6</color><color name="ludex_accent">#8BB7FF</color>
+ <color name="ludex_stroke">#243247</color>
+</resources>
