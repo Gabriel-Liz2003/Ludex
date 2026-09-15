@@ -8,6 +8,7 @@ public final class EmulatorRegistry {
     public static final class Emulator { public final String name,packageName; Emulator(String n,String p){name=n;packageName=p;} }
     private static final LinkedHashMap<String,String> KNOWN=new LinkedHashMap<>();
     static{
+        KNOWN.put("app.gamenative","GameNative");
         KNOWN.put("com.retroarch","RetroArch");KNOWN.put("com.retroarch.aarch64","RetroArch (64-bit)");
         KNOWN.put("org.dolphinemu.dolphinemu","Dolphin");KNOWN.put("org.ppsspp.ppsspp","PPSSPP");KNOWN.put("org.ppsspp.ppssppgold","PPSSPP Gold");
         KNOWN.put("com.github.stenzek.duckstation","DuckStation");KNOWN.put("xyz.aethersx2.android","AetherSX2 / NetherSX2");
