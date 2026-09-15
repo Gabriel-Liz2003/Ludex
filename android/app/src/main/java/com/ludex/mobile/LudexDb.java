@@ -4,25 +4,114 @@ import android.content.*;
 import android.database.Cursor;
 import android.database.sqlite.*;
 import org.json.*;
+import java.time.Instant;
+import java.util.*;
 
 public final class LudexDb extends SQLiteOpenHelper {
-    public LudexDb(Context c){ super(c,"ludex-mobile.db",null,3); }
+    public static final class GameRow {
+        public String id,title,platform,source,packageName,status;
+        public boolean installed,favorite;
+        public long seconds,updatedAt;
+    }
+    public static final class SyncResult { public int inserted,updated,skipped; }
+
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,5);}
     @Override public void onCreate(SQLiteDatabase db){
-        db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 1,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
         db.execSQL("CREATE INDEX idx_sessions_game ON play_sessions(game_id,started_at)");
+        db.execSQL("CREATE TABLE imported_playtime(game_id TEXT NOT NULL,provider TEXT NOT NULL,seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(game_id,provider))");
+        db.execSQL("CREATE INDEX idx_imported_playtime_game ON imported_playtime(game_id)");
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
     }
-    @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");if(oldV<3)db.execSQL("UPDATE games SET updated_at=strftime('%s','now')*1000 WHERE updated_at=0");}
-    public String upsertGame(String pkg,String title,boolean installed){String id="android:"+pkg;ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("package_name",pkg);v.put("installed",installed?1:0);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().insertWithOnConflict("games",null,v,SQLiteDatabase.CONFLICT_IGNORE);ContentValues u=new ContentValues();u.put("title",title);u.put("installed",installed?1:0);u.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",u,"id=?",new String[]{id});return id;}
+    @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
+        if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");
+        if(oldV<3)db.execSQL("UPDATE games SET updated_at=strftime('%s','now')*1000 WHERE updated_at=0");
+        if(oldV<4){
+            db.execSQL("CREATE TABLE IF NOT EXISTS imported_playtime(game_id TEXT NOT NULL,provider TEXT NOT NULL,seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(game_id,provider))");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_imported_playtime_game ON imported_playtime(game_id)");
+        }
+    }
+
+    public String upsertAndroidGame(String pkg,String title,boolean installed){
+        String id="android:"+pkg; long now=System.currentTimeMillis();
+        ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("platform","Android");v.put("source","android");v.put("package_name",pkg);v.put("installed",installed?1:0);v.put("updated_at",now);
+        getWritableDatabase().insertWithOnConflict("games",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+        ContentValues u=new ContentValues();u.put("title",title);u.put("package_name",pkg);u.put("installed",installed?1:0);u.put("updated_at",now);
+        getWritableDatabase().update("games",u,"id=?",new String[]{id});return id;
+    }
     public void markAllAndroidUninstalled(){ContentValues v=new ContentValues();v.put("installed",0);getWritableDatabase().update("games",v,"source='android'",null);}
-    public void insertSession(String id,String game,String pkg,long start,long end){if(end<=start)return;ContentValues v=new ContentValues();v.put("id",id);v.put("game_id",game);v.put("package_name",pkg);v.put("started_at",start);v.put("ended_at",end);v.put("duration_seconds",Math.max(0,(end-start)/1000));getWritableDatabase().insertWithOnConflict("play_sessions",null,v,SQLiteDatabase.CONFLICT_IGNORE);}
-    public long playtime(String game){try(Cursor c=getReadableDatabase().rawQuery("SELECT COALESCE(SUM(duration_seconds),0) FROM play_sessions WHERE game_id=?",new String[]{game})){return c.moveToFirst()?c.getLong(0):0;}}
-    public long totalPlaytime(){try(Cursor c=getReadableDatabase().rawQuery("SELECT COALESCE(SUM(duration_seconds),0) FROM play_sessions",null)){return c.moveToFirst()?c.getLong(0):0;}}
-    public int gameCount(){try(Cursor c=getReadableDatabase().rawQuery("SELECT COUNT(*) FROM games",null)){return c.moveToFirst()?c.getInt(0):0;}}
-    public long getCursor(){try(Cursor c=getReadableDatabase().rawQuery("SELECT value FROM settings WHERE key='usage.cursor'",null)){return c.moveToFirst()?Long.parseLong(c.getString(0)):Math.max(0,System.currentTimeMillis()-86400000L);}}
-    public void setCursor(long value){ContentValues v=new ContentValues();v.put("key","usage.cursor");v.put("value",Long.toString(value));getWritableDatabase().insertWithOnConflict("settings",null,v,SQLiteDatabase.CONFLICT_REPLACE);}
-    public JSONArray gamesJson() throws JSONException {JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,title,platform,source,package_name,installed,favorite,status,updated_at FROM games",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("title",c.getString(1));o.put("platform",c.getString(2));o.put("source",c.getString(3));o.put("package_name",c.getString(4));o.put("installed",c.getInt(5));o.put("favorite",c.getInt(6));o.put("status",c.getString(7));o.put("updated_at_ms",c.getLong(8));a.put(o);}}return a;}
-    public JSONArray sessionsJson() throws JSONException {JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,game_id,package_name,started_at,ended_at,duration_seconds,device,provider FROM play_sessions",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("game_id",c.getString(1));o.put("package_name",c.getString(2));o.put("started_at_ms",c.getLong(3));o.put("ended_at_ms",c.getLong(4));o.put("duration_seconds",c.getLong(5));o.put("device",c.getString(6));o.put("provider",c.getString(7));a.put(o);}}return a;}
-    public void importBundle(JSONObject root) throws JSONException {JSONArray gs=root.optJSONArray("games");if(gs!=null)for(int i=0;i<gs.length();i++){JSONObject g=gs.getJSONObject(i);String id=g.optString("id");if(id.isEmpty())continue;ContentValues v=new ContentValues();v.put("id",id);v.put("title",g.optString("title","Unknown"));v.put("platform",g.optString("platform","PC"));v.put("source",g.optString("source","sync"));if(g.has("package_name"))v.put("package_name",g.optString("package_name",null));v.put("installed",g.optInt("installed",0));v.put("favorite",g.optInt("favorite",0));v.put("status",g.optString("status","Quero jogar"));v.put("updated_at",g.optLong("updated_at_ms",System.currentTimeMillis()));getWritableDatabase().insertWithOnConflict("games",null,v,SQLiteDatabase.CONFLICT_IGNORE);}JSONArray ss=root.optJSONArray("sessions");if(ss!=null)for(int i=0;i<ss.length();i++){JSONObject s=ss.getJSONObject(i);String id=s.optString("id");if(id.isEmpty())continue;long start=s.optLong("started_at_ms"),end=s.optLong("ended_at_ms");if(start>0&&end>=start)insertSession(id,s.optString("game_id"),s.optString("package_name",null),start,end);}}
+    public boolean hasAndroidGame(String pkg){try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM games WHERE id=? LIMIT 1",new String[]{"android:"+pkg})){return c.moveToFirst();}}
+
+    public List<GameRow> listGames(){
+        ArrayList<GameRow> out=new ArrayList<>();
+        String sql="SELECT g.id,g.title,g.platform,g.source,g.package_name,g.installed,g.favorite,g.status,g.updated_at,"+
+            "MAX(COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id),0),COALESCE((SELECT SUM(seconds) FROM imported_playtime p WHERE p.game_id=g.id),0)) total "+
+            "FROM games g ORDER BY g.title COLLATE NOCASE";
+        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);out.add(g);}}
+        return out;
+    }
+
+    public void setImportedPlaytime(String game,String provider,long seconds){
+        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+        getWritableDatabase().execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=? WHERE game_id=? AND provider=?",new Object[]{seconds,System.currentTimeMillis(),game,provider});
+    }
+    public void setFavorite(String id,boolean value){ContentValues v=new ContentValues();v.put("favorite",value?1:0);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",v,"id=?",new String[]{id});}
+    public void setStatus(String id,String status){ContentValues v=new ContentValues();v.put("status",status);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",v,"id=?",new String[]{id});}
+    public void setSetting(String key,String value){ContentValues v=new ContentValues();v.put("key",key);v.put("value",value);getWritableDatabase().insertWithOnConflict("settings",null,v,SQLiteDatabase.CONFLICT_REPLACE);}
+
+    public JSONObject exportBundle() throws JSONException {
+        JSONObject root=new JSONObject();root.put("format","ludex-mobile-sync");root.put("version",1);root.put("exported_at_ms",System.currentTimeMillis());
+        root.put("games",gamesJson());root.put("sessions",sessionsJson());root.put("imported_playtime",importedPlaytimeJson());
+        return root;
+    }
+    private JSONArray gamesJson() throws JSONException {
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,title,platform,source,package_name,installed,favorite,status,updated_at FROM games",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("title",c.getString(1));o.put("platform",c.getString(2));o.put("source",c.getString(3));if(!c.isNull(4))o.put("package_name",c.getString(4));o.put("installed",c.getInt(5));o.put("favorite",c.getInt(6));o.put("status",c.getString(7));o.put("updated_at_ms",c.getLong(8));a.put(o);}}return a;
+    }
+    private JSONArray sessionsJson() throws JSONException {
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,game_id,package_name,started_at,ended_at,duration_seconds,device,provider FROM play_sessions",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("game_id",c.getString(1));if(!c.isNull(2))o.put("package_name",c.getString(2));o.put("started_at_ms",c.getLong(3));o.put("ended_at_ms",c.getLong(4));o.put("duration_seconds",c.getLong(5));o.put("device",c.getString(6));o.put("provider",c.getString(7));a.put(o);}}return a;
+    }
+    private JSONArray importedPlaytimeJson() throws JSONException {
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,provider,seconds,updated_at FROM imported_playtime",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("game_id",c.getString(0));o.put("provider",c.getString(1));o.put("seconds",c.getLong(2));o.put("updated_at_ms",c.getLong(3));a.put(o);}}return a;
+    }
+
+    public SyncResult importBundle(JSONObject root) throws JSONException {
+        String format=root.optString("format");int version=root.optInt("version",0);
+        if(version!=1||(!"ludex-mobile-sync".equals(format)&&!"ludex-backup".equals(format)))throw new JSONException("Formato/versão não suportado");
+        JSONObject data="ludex-backup".equals(format)?root.optJSONObject("data"):root;if(data==null)data=root;
+        SyncResult result=new SyncResult();SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try{
+            JSONArray gs=data.optJSONArray("games");if(gs!=null)for(int i=0;i<gs.length();i++)importGame(db,gs.getJSONObject(i),result);
+            JSONArray ss=data.optJSONArray("sessions");if(ss!=null)for(int i=0;i<ss.length();i++)importSession(db,ss.getJSONObject(i));
+            JSONArray ip=data.optJSONArray("imported_playtime");if(ip!=null)for(int i=0;i<ip.length();i++)importPlaytime(db,ip.getJSONObject(i));
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return result;
+    }
+
+    private void importGame(SQLiteDatabase db,JSONObject g,SyncResult result){
+        String id=g.optString("id"),title=g.optString("title");if(id.isEmpty()||title.isEmpty()){result.skipped++;return;}
+        long remote=parseTime(g,"updated_at","updated_at_ms");
+        long local=-1;try(Cursor c=db.rawQuery("SELECT updated_at FROM games WHERE id=?",new String[]{id})){if(c.moveToFirst())local=c.getLong(0);}
+        if(local>=0&&remote>0&&remote<=local){result.skipped++;return;}
+        ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("platform",g.optString("platform","PC"));v.put("source",g.optString("source","sync"));
+        if(g.has("package_name")&&!g.isNull("package_name"))v.put("package_name",g.optString("package_name"));
+        v.put("installed",g.optInt("installed",0));v.put("favorite",g.optInt("favorite",0));v.put("status",g.optString("status","Quero jogar"));v.put("updated_at",remote>0?remote:System.currentTimeMillis());
+        if(local<0){db.insertWithOnConflict("games",null,v,SQLiteDatabase.CONFLICT_IGNORE);result.inserted++;}
+        else{v.remove("id");db.update("games",v,"id=?",new String[]{id});result.updated++;}
+    }
+    private void importSession(SQLiteDatabase db,JSONObject s){
+        String id=s.optString("id"),game=s.optString("game_id");if(id.isEmpty()||game.isEmpty())return;
+        long start=parseTime(s,"started_at","started_at_ms"),end=parseTime(s,"ended_at","ended_at_ms");if(start<=0||end<start)return;
+        ContentValues v=new ContentValues();v.put("id",id);v.put("game_id",game);if(s.has("package_name"))v.put("package_name",s.optString("package_name",null));v.put("started_at",start);v.put("ended_at",end);v.put("duration_seconds",s.optLong("duration_seconds",Math.max(0,(end-start)/1000)));v.put("device",s.optString("device","sync"));v.put("provider",s.optString("provider","sync"));db.insertWithOnConflict("play_sessions",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+    }
+    private void importPlaytime(SQLiteDatabase db,JSONObject x){
+        String game=x.optString("game_id"),provider=x.optString("provider");if(game.isEmpty()||provider.isEmpty())return;long seconds=Math.max(0,x.optLong("seconds"));long updated=parseTime(x,"updated_at","updated_at_ms");
+        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",updated>0?updated:System.currentTimeMillis());db.insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);db.execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=MAX(updated_at,?) WHERE game_id=? AND provider=?",new Object[]{seconds,updated,game,provider});
+    }
+    private static long parseTime(JSONObject o,String isoKey,String msKey){
+        if(o.has(msKey))return o.optLong(msKey,0);
+        String iso=o.optString(isoKey,"");if(iso.isEmpty())return 0;try{return Instant.parse(iso).toEpochMilli();}catch(Exception e){return 0;}
+    }
 }
