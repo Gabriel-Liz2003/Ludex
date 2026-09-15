@@ -39,6 +39,7 @@ public final class MainActivity extends AppCompatActivity {
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
+    private File pendingUpdateApk;
 
     private final ActivityResultLauncher<Intent> importLauncher=registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(), r -> {
@@ -82,6 +83,13 @@ public final class MainActivity extends AppCompatActivity {
         refreshAsync(true);
     }
 
+    @Override protected void onResume(){
+        super.onResume();
+        if(pendingUpdateApk!=null && Build.VERSION.SDK_INT>=26 && getPackageManager().canRequestPackageInstalls()){
+            File apk=pendingUpdateApk; pendingUpdateApk=null; installDownloadedUpdate(apk);
+        }
+    }
+
     @Override protected void onDestroy(){ super.onDestroy(); io.shutdownNow(); }
 
     private void bindViews(){
@@ -104,6 +112,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
+        findViewById(R.id.mobile_update).setOnClickListener(v->checkForAndroidUpdate());
 
         search.addTextChangedListener(new SimpleTextWatcher(s->renderCurrent()));
         NavigationBarView nav=findViewById(R.id.bottom_nav);
@@ -341,6 +350,55 @@ public final class MainActivity extends AppCompatActivity {
             try{startActivity(Intent.createChooser(view,"Abrir ROM com emulador"));}
             catch(Exception e){toast("O emulador não declarou suporte a este tipo de ROM");}
         }
+    }
+
+    private void checkForAndroidUpdate(){
+        View button=findViewById(R.id.mobile_update);button.setEnabled(false);toast("Verificando atualização…");
+        io.execute(()->{
+            try{
+                AndroidUpdater.UpdateInfo update=AndroidUpdater.checkLatest();
+                runOnUiThread(()->{
+                    button.setEnabled(true);
+                    if(update==null){toast("Você já está na versão Android mais recente");return;}
+                    new MaterialAlertDialogBuilder(this)
+                        .setTitle("Ludex Android "+update.version)
+                        .setMessage("Versão instalada: "+BuildConfig.VERSION_NAME+"\n\nBaixar e instalar a atualização? O Android pedirá sua confirmação.")
+                        .setNegativeButton("Agora não",null)
+                        .setPositiveButton("Atualizar",(d,w)->downloadAndroidUpdate(update))
+                        .show();
+                });
+            }catch(Exception e){runOnUiThread(()->{button.setEnabled(true);toast("Não foi possível verificar atualizações: "+e.getMessage());});}
+        });
+    }
+
+    private void downloadAndroidUpdate(AndroidUpdater.UpdateInfo update){
+        toast("Baixando Ludex "+update.version+"…");
+        io.execute(()->{
+            try{
+                File apk=AndroidUpdater.downloadAndVerify(this,update);
+                runOnUiThread(()->requestInstallUpdate(apk));
+            }catch(Exception e){runOnUiThread(()->toast("Falha ao baixar atualização: "+e.getMessage()));}
+        });
+    }
+
+    private void requestInstallUpdate(File apk){
+        if(Build.VERSION.SDK_INT>=26 && !getPackageManager().canRequestPackageInstalls()){
+            pendingUpdateApk=apk;
+            toast("Permita que o Ludex instale atualizações e volte ao app");
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+getPackageName())));
+            return;
+        }
+        installDownloadedUpdate(apk);
+    }
+
+    private void installDownloadedUpdate(File apk){
+        try{
+            Uri uri=androidx.core.content.FileProvider.getUriForFile(this,getPackageName()+".fileprovider",apk);
+            Intent install=new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri,"application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(install);
+        }catch(Exception e){toast("Não foi possível abrir o instalador: "+e.getMessage());}
     }
 
     private void pickImport(){
