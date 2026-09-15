@@ -204,14 +204,36 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
-    private int importUsage(){
+    private Map<String,Long> readHistoricalUsage(){
         UsageStatsManager manager=(UsageStatsManager)getSystemService(USAGE_STATS_SERVICE);
         long end=System.currentTimeMillis();
-        long start=end-(5L*365*24*60*60*1000);
-        Map<String,UsageStats> stats=manager.queryAndAggregateUsageStats(start,end);
+        long start=Math.max(0,end-(3L*365*24*60*60*1000));
+        HashMap<String,Long> best=new HashMap<>();
+        int[] intervals={UsageStatsManager.INTERVAL_YEARLY,UsageStatsManager.INTERVAL_MONTHLY,UsageStatsManager.INTERVAL_WEEKLY,UsageStatsManager.INTERVAL_DAILY};
+        for(int interval:intervals){
+            HashMap<String,Long> totals=new HashMap<>();
+            List<UsageStats> rows=manager.queryUsageStats(interval,start,end);
+            if(rows==null)continue;
+            for(UsageStats s:rows){
+                if(s==null||s.getPackageName()==null)continue;
+                long sec=Math.max(0,s.getTotalTimeInForeground()/1000L);
+                totals.put(s.getPackageName(),totals.getOrDefault(s.getPackageName(),0L)+sec);
+            }
+            for(Map.Entry<String,Long> x:totals.entrySet())best.put(x.getKey(),Math.max(best.getOrDefault(x.getKey(),0L),x.getValue()));
+        }
+        Map<String,UsageStats> aggregate=manager.queryAndAggregateUsageStats(start,end);
+        if(aggregate!=null)for(Map.Entry<String,UsageStats> x:aggregate.entrySet()){
+            long sec=Math.max(0,x.getValue().getTotalTimeInForeground()/1000L);
+            best.put(x.getKey(),Math.max(best.getOrDefault(x.getKey(),0L),sec));
+        }
+        return best;
+    }
+
+    private int importUsage(){
+        Map<String,Long> stats=readHistoricalUsage();
         PackageManager pm=getPackageManager();
         int changed=0;
-        for(Map.Entry<String,UsageStats> x:stats.entrySet()){
+        for(Map.Entry<String,Long> x:stats.entrySet()){
             String pkg=x.getKey();
             if(!db.hasAndroidGame(pkg)){
                 try{
@@ -221,24 +243,70 @@ public final class MainActivity extends AppCompatActivity {
                     }else continue;
                 }catch(Exception ignored){continue;}
             }
-            long sec=Math.max(0,x.getValue().getTotalTimeInForeground()/1000L);
+            long raw=Math.max(0,x.getValue());
+            db.setSetting("usage.raw."+pkg,Long.toString(raw));
+            long baselineTotal=db.getSettingLong("usage.baseline.total."+pkg,-1);
+            long baselineRaw=db.getSettingLong("usage.baseline.raw."+pkg,-1);
+            long sec=raw;
+            if(baselineTotal>=0&&baselineRaw>=0)sec=baselineTotal+Math.max(0,raw-baselineRaw);
             if(sec>0){db.setImportedPlaytime("android:"+pkg,"android-usage",sec);changed++;}
         }
-        db.setSetting("usage.last_import_ms",Long.toString(end));
+        db.setSetting("usage.last_import_ms",Long.toString(System.currentTimeMillis()));
         return changed;
     }
 
     private void showGame(LudexDb.GameRow g){
-        String[] statuses={"Quero jogar","Jogando","Pausado","Concluído","100%","Abandonado"};
         new MaterialAlertDialogBuilder(this)
             .setTitle(g.title)
             .setMessage(g.platform+" · "+providerLabel(g.source)+"\n"+format(g.seconds)+" registrados\nStatus: "+g.status+
                 (g.packageName!=null?"\nApp: "+g.packageName:""))
             .setNeutralButton(g.favorite?"Remover favorito":"Favoritar",(d,w)->{db.setFavorite(g.id,!g.favorite);refreshAsync(false);})
-            .setNegativeButton("Status",(d,w)->new MaterialAlertDialogBuilder(this).setTitle("Status")
-                .setItems(statuses,(d2,which)->{db.setStatus(g.id,statuses[which]);refreshAsync(false);}).show())
+            .setNegativeButton("Mais",(d,w)->showGameActions(g))
             .setPositiveButton(g.installed&&g.packageName!=null?"JOGAR":"Fechar",(d,w)->{if(g.installed&&g.packageName!=null)launchGame(g);})
             .show();
+    }
+
+    private void showGameActions(LudexDb.GameRow g){
+        ArrayList<String> actions=new ArrayList<>();
+        actions.add("Alterar status");
+        if("android".equals(g.source)&&g.packageName!=null)actions.add("Ajustar horas totais");
+        new MaterialAlertDialogBuilder(this).setTitle(g.title).setItems(actions.toArray(new String[0]),(d,which)->{
+            if(which==0)showStatusPicker(g);
+            else calibratePlaytime(g);
+        }).show();
+    }
+
+    private void showStatusPicker(LudexDb.GameRow g){
+        String[] statuses={"Quero jogar","Jogando","Pausado","Concluído","100%","Abandonado"};
+        new MaterialAlertDialogBuilder(this).setTitle("Status").setItems(statuses,(d,which)->{
+            db.setStatus(g.id,statuses[which]);refreshAsync(false);
+        }).show();
+    }
+
+    private void calibratePlaytime(LudexDb.GameRow g){
+        EditText input=new EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER|android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        input.setHint("Ex.: 130");
+        input.setText(String.format(Locale.ROOT,"%.1f",g.seconds/3600.0));
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        FrameLayout wrap=new FrameLayout(this);wrap.setPadding(pad,0,pad,0);wrap.addView(input);
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Ajustar horas de "+g.title)
+            .setMessage("Use o total que aparece na Play Store/Play Games. O Ludex salva esse valor como baseline e acrescenta apenas o uso novo detectado pelo Android.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Salvar",(d,w)->{
+                try{
+                    double hours=Double.parseDouble(input.getText().toString().replace(',','.'));
+                    long total=Math.max(0,Math.round(hours*3600.0));
+                    long raw=db.getSettingLong("usage.raw."+g.packageName,0);
+                    db.setSetting("usage.baseline.total."+g.packageName,Long.toString(total));
+                    db.setSetting("usage.baseline.raw."+g.packageName,Long.toString(raw));
+                    db.replaceImportedPlaytime(g.id,"android-usage",total);
+                    refreshAsync(false);
+                    toast("Baseline salvo: "+format(total));
+                }catch(Exception e){toast("Informe um número válido de horas");}
+            }).show();
     }
 
     private void launchGame(LudexDb.GameRow g){
