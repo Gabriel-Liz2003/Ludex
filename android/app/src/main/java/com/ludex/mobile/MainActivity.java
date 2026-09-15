@@ -39,6 +39,7 @@ public final class MainActivity extends AppCompatActivity {
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
+    private File pendingUpdateApk;
 
     private final ActivityResultLauncher<Intent> importLauncher=registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(), r -> {
@@ -82,6 +83,13 @@ public final class MainActivity extends AppCompatActivity {
         refreshAsync(true);
     }
 
+    @Override protected void onResume(){
+        super.onResume();
+        if(pendingUpdateApk!=null && Build.VERSION.SDK_INT>=26 && getPackageManager().canRequestPackageInstalls()){
+            File apk=pendingUpdateApk; pendingUpdateApk=null; installDownloadedUpdate(apk);
+        }
+    }
+
     @Override protected void onDestroy(){ super.onDestroy(); io.shutdownNow(); }
 
     private void bindViews(){
@@ -104,6 +112,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
+        findViewById(R.id.mobile_update).setOnClickListener(v->checkForAndroidUpdate());
 
         search.addTextChangedListener(new SimpleTextWatcher(s->renderCurrent()));
         NavigationBarView nav=findViewById(R.id.bottom_nav);
@@ -204,14 +213,36 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
-    private int importUsage(){
+    private Map<String,Long> readHistoricalUsage(){
         UsageStatsManager manager=(UsageStatsManager)getSystemService(USAGE_STATS_SERVICE);
         long end=System.currentTimeMillis();
-        long start=end-(5L*365*24*60*60*1000);
-        Map<String,UsageStats> stats=manager.queryAndAggregateUsageStats(start,end);
+        long start=Math.max(0,end-(3L*365*24*60*60*1000));
+        HashMap<String,Long> best=new HashMap<>();
+        int[] intervals={UsageStatsManager.INTERVAL_YEARLY,UsageStatsManager.INTERVAL_MONTHLY,UsageStatsManager.INTERVAL_WEEKLY,UsageStatsManager.INTERVAL_DAILY};
+        for(int interval:intervals){
+            HashMap<String,Long> totals=new HashMap<>();
+            List<UsageStats> rows=manager.queryUsageStats(interval,start,end);
+            if(rows==null)continue;
+            for(UsageStats s:rows){
+                if(s==null||s.getPackageName()==null)continue;
+                long sec=Math.max(0,s.getTotalTimeInForeground()/1000L);
+                totals.put(s.getPackageName(),totals.getOrDefault(s.getPackageName(),0L)+sec);
+            }
+            for(Map.Entry<String,Long> x:totals.entrySet())best.put(x.getKey(),Math.max(best.getOrDefault(x.getKey(),0L),x.getValue()));
+        }
+        Map<String,UsageStats> aggregate=manager.queryAndAggregateUsageStats(start,end);
+        if(aggregate!=null)for(Map.Entry<String,UsageStats> x:aggregate.entrySet()){
+            long sec=Math.max(0,x.getValue().getTotalTimeInForeground()/1000L);
+            best.put(x.getKey(),Math.max(best.getOrDefault(x.getKey(),0L),sec));
+        }
+        return best;
+    }
+
+    private int importUsage(){
+        Map<String,Long> stats=readHistoricalUsage();
         PackageManager pm=getPackageManager();
         int changed=0;
-        for(Map.Entry<String,UsageStats> x:stats.entrySet()){
+        for(Map.Entry<String,Long> x:stats.entrySet()){
             String pkg=x.getKey();
             if(!db.hasAndroidGame(pkg)){
                 try{
@@ -221,24 +252,70 @@ public final class MainActivity extends AppCompatActivity {
                     }else continue;
                 }catch(Exception ignored){continue;}
             }
-            long sec=Math.max(0,x.getValue().getTotalTimeInForeground()/1000L);
+            long raw=Math.max(0,x.getValue());
+            db.setSetting("usage.raw."+pkg,Long.toString(raw));
+            long baselineTotal=db.getSettingLong("usage.baseline.total."+pkg,-1);
+            long baselineRaw=db.getSettingLong("usage.baseline.raw."+pkg,-1);
+            long sec=raw;
+            if(baselineTotal>=0&&baselineRaw>=0)sec=baselineTotal+Math.max(0,raw-baselineRaw);
             if(sec>0){db.setImportedPlaytime("android:"+pkg,"android-usage",sec);changed++;}
         }
-        db.setSetting("usage.last_import_ms",Long.toString(end));
+        db.setSetting("usage.last_import_ms",Long.toString(System.currentTimeMillis()));
         return changed;
     }
 
     private void showGame(LudexDb.GameRow g){
-        String[] statuses={"Quero jogar","Jogando","Pausado","Concluído","100%","Abandonado"};
         new MaterialAlertDialogBuilder(this)
             .setTitle(g.title)
             .setMessage(g.platform+" · "+providerLabel(g.source)+"\n"+format(g.seconds)+" registrados\nStatus: "+g.status+
                 (g.packageName!=null?"\nApp: "+g.packageName:""))
             .setNeutralButton(g.favorite?"Remover favorito":"Favoritar",(d,w)->{db.setFavorite(g.id,!g.favorite);refreshAsync(false);})
-            .setNegativeButton("Status",(d,w)->new MaterialAlertDialogBuilder(this).setTitle("Status")
-                .setItems(statuses,(d2,which)->{db.setStatus(g.id,statuses[which]);refreshAsync(false);}).show())
+            .setNegativeButton("Mais",(d,w)->showGameActions(g))
             .setPositiveButton(g.installed&&g.packageName!=null?"JOGAR":"Fechar",(d,w)->{if(g.installed&&g.packageName!=null)launchGame(g);})
             .show();
+    }
+
+    private void showGameActions(LudexDb.GameRow g){
+        ArrayList<String> actions=new ArrayList<>();
+        actions.add("Alterar status");
+        if("android".equals(g.source)&&g.packageName!=null)actions.add("Ajustar horas totais");
+        new MaterialAlertDialogBuilder(this).setTitle(g.title).setItems(actions.toArray(new String[0]),(d,which)->{
+            if(which==0)showStatusPicker(g);
+            else calibratePlaytime(g);
+        }).show();
+    }
+
+    private void showStatusPicker(LudexDb.GameRow g){
+        String[] statuses={"Quero jogar","Jogando","Pausado","Concluído","100%","Abandonado"};
+        new MaterialAlertDialogBuilder(this).setTitle("Status").setItems(statuses,(d,which)->{
+            db.setStatus(g.id,statuses[which]);refreshAsync(false);
+        }).show();
+    }
+
+    private void calibratePlaytime(LudexDb.GameRow g){
+        EditText input=new EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER|android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        input.setHint("Ex.: 130");
+        input.setText(String.format(Locale.ROOT,"%.1f",g.seconds/3600.0));
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        FrameLayout wrap=new FrameLayout(this);wrap.setPadding(pad,0,pad,0);wrap.addView(input);
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Ajustar horas de "+g.title)
+            .setMessage("Use o total que aparece na Play Store/Play Games. O Ludex salva esse valor como baseline e acrescenta apenas o uso novo detectado pelo Android.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Salvar",(d,w)->{
+                try{
+                    double hours=Double.parseDouble(input.getText().toString().replace(',','.'));
+                    long total=Math.max(0,Math.round(hours*3600.0));
+                    long raw=db.getSettingLong("usage.raw."+g.packageName,0);
+                    db.setSetting("usage.baseline.total."+g.packageName,Long.toString(total));
+                    db.setSetting("usage.baseline.raw."+g.packageName,Long.toString(raw));
+                    db.replaceImportedPlaytime(g.id,"android-usage",total);
+                    refreshAsync(false);
+                    toast("Baseline salvo: "+format(total));
+                }catch(Exception e){toast("Informe um número válido de horas");}
+            }).show();
     }
 
     private void launchGame(LudexDb.GameRow g){
@@ -273,6 +350,55 @@ public final class MainActivity extends AppCompatActivity {
             try{startActivity(Intent.createChooser(view,"Abrir ROM com emulador"));}
             catch(Exception e){toast("O emulador não declarou suporte a este tipo de ROM");}
         }
+    }
+
+    private void checkForAndroidUpdate(){
+        View button=findViewById(R.id.mobile_update);button.setEnabled(false);toast("Verificando atualização…");
+        io.execute(()->{
+            try{
+                AndroidUpdater.UpdateInfo update=AndroidUpdater.checkLatest();
+                runOnUiThread(()->{
+                    button.setEnabled(true);
+                    if(update==null){toast("Você já está na versão Android mais recente");return;}
+                    new MaterialAlertDialogBuilder(this)
+                        .setTitle("Ludex Android "+update.version)
+                        .setMessage("Versão instalada: "+BuildConfig.VERSION_NAME+"\n\nBaixar e instalar a atualização? O Android pedirá sua confirmação.")
+                        .setNegativeButton("Agora não",null)
+                        .setPositiveButton("Atualizar",(d,w)->downloadAndroidUpdate(update))
+                        .show();
+                });
+            }catch(Exception e){runOnUiThread(()->{button.setEnabled(true);toast("Não foi possível verificar atualizações: "+e.getMessage());});}
+        });
+    }
+
+    private void downloadAndroidUpdate(AndroidUpdater.UpdateInfo update){
+        toast("Baixando Ludex "+update.version+"…");
+        io.execute(()->{
+            try{
+                File apk=AndroidUpdater.downloadAndVerify(this,update);
+                runOnUiThread(()->requestInstallUpdate(apk));
+            }catch(Exception e){runOnUiThread(()->toast("Falha ao baixar atualização: "+e.getMessage()));}
+        });
+    }
+
+    private void requestInstallUpdate(File apk){
+        if(Build.VERSION.SDK_INT>=26 && !getPackageManager().canRequestPackageInstalls()){
+            pendingUpdateApk=apk;
+            toast("Permita que o Ludex instale atualizações e volte ao app");
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+getPackageName())));
+            return;
+        }
+        installDownloadedUpdate(apk);
+    }
+
+    private void installDownloadedUpdate(File apk){
+        try{
+            Uri uri=androidx.core.content.FileProvider.getUriForFile(this,getPackageName()+".fileprovider",apk);
+            Intent install=new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri,"application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(install);
+        }catch(Exception e){toast("Não foi possível abrir o instalador: "+e.getMessage());}
     }
 
     private void pickImport(){

@@ -75,6 +75,11 @@
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:text="Atualizar horas dos jogos Android"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/mobile_update"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Verificar atualização do Ludex"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp"
                     android:text="Privacidade: o Ludex lê somente os dados de uso disponibilizados pelo Android. Nada é enviado para um servidor do Ludex."
                     android:textColor="@color/ludex_muted" android:textSize="12sp"/>

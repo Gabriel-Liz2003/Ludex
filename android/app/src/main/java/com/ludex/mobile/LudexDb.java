@@ -57,9 +57,15 @@ public final class LudexDb extends SQLiteOpenHelper {
         getWritableDatabase().insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);
         getWritableDatabase().execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=? WHERE game_id=? AND provider=?",new Object[]{seconds,System.currentTimeMillis(),game,provider});
     }
+    public void replaceImportedPlaytime(String game,String provider,long seconds){
+        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",Math.max(0,seconds));v.put("updated_at",System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_REPLACE);
+    }
     public void setFavorite(String id,boolean value){ContentValues v=new ContentValues();v.put("favorite",value?1:0);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",v,"id=?",new String[]{id});}
     public void setStatus(String id,String status){ContentValues v=new ContentValues();v.put("status",status);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",v,"id=?",new String[]{id});}
     public void setSetting(String key,String value){ContentValues v=new ContentValues();v.put("key",key);v.put("value",value);getWritableDatabase().insertWithOnConflict("settings",null,v,SQLiteDatabase.CONFLICT_REPLACE);}
+    public String getSetting(String key,String fallback){try(Cursor c=getReadableDatabase().rawQuery("SELECT value FROM settings WHERE key=?",new String[]{key})){return c.moveToFirst()?c.getString(0):fallback;}}
+    public long getSettingLong(String key,long fallback){try{return Long.parseLong(getSetting(key,Long.toString(fallback)));}catch(Exception e){return fallback;}}
 
     public JSONObject exportBundle() throws JSONException {
         JSONObject root=new JSONObject();root.put("format","ludex-mobile-sync");root.put("version",1);root.put("exported_at_ms",System.currentTimeMillis());
