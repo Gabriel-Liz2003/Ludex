@@ -1,5 +1,7 @@
 plugins { id 'com.android.application' }
 
+def ludexKeystore = System.getenv('LUDEX_ANDROID_KEYSTORE')
+
 android {
     namespace 'com.ludex.mobile'
     compileSdk 36
@@ -10,8 +12,22 @@ android {
         versionCode 12
         versionName '0.9.6'
     }
+    signingConfigs {
+        ludexRelease {
+            if (ludexKeystore) {
+                storeFile file(ludexKeystore)
+                storePassword System.getenv('LUDEX_ANDROID_STORE_PASSWORD')
+                keyAlias System.getenv('LUDEX_ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('LUDEX_ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
-        release { minifyEnabled false; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' }
+        release {
+            minifyEnabled false
+            if (ludexKeystore) signingConfig signingConfigs.ludexRelease
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
