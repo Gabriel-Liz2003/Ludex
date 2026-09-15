@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/ludex_bg">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:layout_width="match_parent" android:layout_height="?attr/actionBarSize"
+        android:paddingStart="10dp" android:paddingEnd="10dp"
+        app:title="Ludex" app:subtitle="Sua biblioteca, em qualquer tela"
+        app:titleTextColor="@color/ludex_text" app:subtitleTextColor="@color/ludex_muted"
+        android:background="@color/ludex_bg"/>
+
+    <com.google.android.material.card.MaterialCardView
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp" android:layout_marginTop="6dp"
+        app:cardBackgroundColor="@color/ludex_surface" app:cardCornerRadius="18dp"
+        app:strokeColor="@color/ludex_stroke" app:strokeWidth="1dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:gravity="center_vertical" android:padding="14dp">
+            <TextView android:id="@+id/summary" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Carregando biblioteca…" android:textColor="@color/ludex_text"
+                android:textSize="13sp"/>
+            <com.google.android.material.button.MaterialButton android:id="@+id/usage_access"
+                style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="42dp"
+                android:text="Uso"/>
+            <com.google.android.material.button.MaterialButton android:id="@+id/refresh"
+                style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="42dp"
+                android:text="Atualizar"/>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp" android:layout_marginTop="12dp"
+        app:boxBackgroundMode="filled" app:boxBackgroundColor="@color/ludex_surface"
+        app:boxCornerRadiusTopStart="14dp" app:boxCornerRadiusTopEnd="14dp"
+        app:boxCornerRadiusBottomStart="14dp" app:boxCornerRadiusBottomEnd="14dp"
+        app:hintEnabled="false">
+        <com.google.android.material.textfield.TextInputEditText android:id="@+id/search"
+            android:layout_width="match_parent" android:layout_height="52dp" android:hint="Buscar na biblioteca"
+            android:singleLine="true" android:textColor="@color/ludex_text" android:textColorHint="@color/ludex_muted"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <androidx.recyclerview.widget.RecyclerView android:id="@+id/game_list"
+            android:layout_width="match_parent" android:layout_height="match_parent"
+            android:padding="12dp" android:clipToPadding="false"/>
+
+        <LinearLayout android:id="@+id/empty_state" android:layout_width="match_parent" android:layout_height="match_parent"
+            android:gravity="center" android:orientation="vertical" android:visibility="gone" android:padding="32dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Nada por aqui ainda"
+                android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Sincronize o PC ou atualize os jogos instalados." android:textColor="@color/ludex_muted"
+                android:gravity="center" android:layout_marginTop="6dp"/>
+        </LinearLayout>
+
+        <ScrollView android:id="@+id/sync_panel" android:layout_width="match_parent" android:layout_height="match_parent"
+            android:visibility="gone">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="18dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PC ↔ Android"
+                    android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="22sp"/>
+                <TextView android:id="@+id/sync_info" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" android:textColor="@color/ludex_muted" android:textSize="14sp"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/sync_import"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp"
+                    android:text="Importar biblioteca do PC"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/sync_export"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Exportar para o PC"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/sync_usage"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Atualizar horas dos jogos Android"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp"
+                    android:text="Privacidade: o Ludex lê somente os dados de uso disponibilizados pelo Android. Nada é enviado para um servidor do Ludex."
+                    android:textColor="@color/ludex_muted" android:textSize="12sp"/>
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottom_nav" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:background="@color/ludex_surface" app:itemIconTint="@color/nav_colors"
+        app:itemTextColor="@color/nav_colors" app:labelVisibilityMode="labeled" app:menu="@menu/bottom_nav"/>
+</LinearLayout>
