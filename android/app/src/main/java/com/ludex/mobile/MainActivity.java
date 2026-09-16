@@ -36,7 +36,7 @@ public final class MainActivity extends AppCompatActivity {
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo;
+    private TextView summary, syncInfo, steamSyncInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
@@ -157,6 +157,7 @@ public final class MainActivity extends AppCompatActivity {
         summary=findViewById(R.id.summary);
         syncPanel=findViewById(R.id.sync_panel);
         syncInfo=findViewById(R.id.sync_info);
+        steamSyncInfo=findViewById(R.id.steam_sync_info);
         emptyState=findViewById(R.id.empty_state);
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setItemAnimator(new DefaultItemAnimator());
@@ -171,6 +172,8 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
+        findViewById(R.id.steam_config).setOnClickListener(v->showSteamConfig());
+        findViewById(R.id.steam_sync).setOnClickListener(v->syncSteamPlaytime(true));
         findViewById(R.id.mobile_update).setOnClickListener(v->checkForAndroidUpdate());
 
         search.addTextChangedListener(new SimpleTextWatcher(s->renderCurrent()));
@@ -223,6 +226,7 @@ public final class MainActivity extends AppCompatActivity {
         if(sync){
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
                 "O Android não expõe o histórico oficial do Google Play; o Ludex usa Usage Access para medir o tempo em primeiro plano dos jogos neste aparelho e sincroniza esse tempo com o PC.");
+            updateSteamSyncInfo();
             return;
         }
         if(tab==Tab.EMULATORS){
@@ -547,6 +551,111 @@ public final class MainActivity extends AppCompatActivity {
             try{startActivity(Intent.createChooser(view,"Abrir ROM com emulador"));}
             catch(Exception e){toast("O emulador não declarou suporte a este tipo de ROM");}
         }
+    }
+
+    private void updateSteamSyncInfo(){
+        String steamId=db.getSetting("steam.id64","");
+        boolean hasKey=!SecretStore.get(this,"steam.api_key").isEmpty();
+        long last=db.getSettingLong("steam.last_sync_ms",0);
+        if(steamId.isEmpty()||!hasKey){
+            steamSyncInfo.setText("Não configurado. Informe SteamID64 e API Key para importar o playtime dos jogos GameNative/Steam.");
+            return;
+        }
+        String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
+        steamSyncInfo.setText("Steam configurada · "+steamId+suffix);
+    }
+
+    private void showSteamConfig(){
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,8,pad,0);
+
+        EditText steamId=new EditText(this);
+        steamId.setSingleLine(true);
+        steamId.setHint("SteamID64");
+        steamId.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        steamId.setText(db.getSetting("steam.id64",""));
+        wrap.addView(steamId,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        boolean alreadyHasKey=!SecretStore.get(this,"steam.api_key").isEmpty();
+        EditText apiKey=new EditText(this);
+        apiKey.setSingleLine(true);
+        apiKey.setHint(alreadyHasKey?"API Key (vazio = manter a atual)":"Steam Web API Key");
+        apiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        wrap.addView(apiKey,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView keyLink=new TextView(this);
+        keyLink.setText("Obter API Key na Steam ↗");
+        keyLink.setTextColor(getColor(R.color.ludex_accent));
+        keyLink.setTextSize(14);
+        keyLink.setPadding(0,pad/2,0,pad/2);
+        keyLink.setOnClickListener(v->{
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://steamcommunity.com/dev/apikey")));}
+            catch(Exception e){toast("Não foi possível abrir a página da Steam");}
+        });
+        wrap.addView(keyLink,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView note=new TextView(this);
+        note.setText("A API Key fica criptografada pelo Android Keystore e não entra no arquivo de sync/export.");
+        note.setTextColor(getColor(R.color.ludex_muted));
+        note.setTextSize(12);
+        wrap.addView(note,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Steam no Android")
+            .setMessage("O Ludex usa o SteamID64 + GetOwnedGames para associar playtime pelo AppID dos atalhos do GameNative.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Salvar",(d,w)->{
+                String id=steamId.getText()==null?"":steamId.getText().toString().trim();
+                String key=apiKey.getText()==null?"":apiKey.getText().toString().trim();
+                if(!id.matches("\\d{16,20}")){toast("SteamID64 inválido");return;}
+                if(key.isEmpty()&&!alreadyHasKey){toast("Informe a Steam Web API Key");return;}
+                try{
+                    db.setSetting("steam.id64",id);
+                    if(!key.isEmpty())SecretStore.put(this,"steam.api_key",key);
+                    updateSteamSyncInfo();
+                    toast("Steam configurada");
+                    syncSteamPlaytime(true);
+                }catch(Exception e){toast("Não foi possível proteger a API Key: "+e.getMessage());}
+            }).show();
+    }
+
+    private void syncSteamPlaytime(boolean notify){
+        String steamId=db.getSetting("steam.id64","");
+        String key=SecretStore.get(this,"steam.api_key");
+        if(steamId.isEmpty()||key.isEmpty()){
+            if(notify)showSteamConfig();
+            return;
+        }
+        if(notify)toast("Sincronizando horas da Steam…");
+        io.execute(()->{
+            try{
+                Map<String,Long> owned=SteamPlaytimeClient.getOwnedPlaytime(key,steamId);
+                List<LudexDb.GameNativeSteamLink> links=db.listGameNativeSteamLinks();
+                int matched=0;
+                for(LudexDb.GameNativeSteamLink link:links){
+                    Long sec=owned.get(link.appId);
+                    if(sec==null)continue;
+                    db.replaceImportedPlaytime(link.gameId,"steam",sec);
+                    matched++;
+                }
+                db.setSetting("steam.last_sync_ms",Long.toString(System.currentTimeMillis()));
+                final int count=matched;
+                final int total=owned.size();
+                runOnUiThread(()->{
+                    updateSteamSyncInfo();
+                    if(notify){
+                        if(total==0)toast("A Steam não retornou jogos. Confira SteamID64 e privacidade da conta.");
+                        else toast(count+" jogos do GameNative receberam playtime da Steam");
+                    }
+                    refreshAsync(false);
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha na Steam: "+e.getMessage()));
+            }
+        });
     }
 
     private void checkForAndroidUpdate(){
