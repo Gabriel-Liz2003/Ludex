@@ -18,6 +18,10 @@ public final class LudexDb extends SQLiteOpenHelper {
         public final String provider,externalId;
         GameNativeLaunch(String provider,String externalId){this.provider=provider;this.externalId=externalId;}
     }
+    public static final class GameNativeSteamLink {
+        public final String gameId,appId;
+        GameNativeSteamLink(String gameId,String appId){this.gameId=gameId;this.appId=appId;}
+    }
 
     public LudexDb(Context c){super(c,"ludex-mobile.db",null,6);}
     @Override public void onCreate(SQLiteDatabase db){
@@ -92,6 +96,14 @@ public final class LudexDb extends SQLiteOpenHelper {
             if(c.moveToFirst())return new GameNativeLaunch(c.getString(0),c.getString(1));
         }
         return null;
+    }
+
+    public List<GameNativeSteamLink> listGameNativeSteamLinks(){
+        ArrayList<GameNativeSteamLink> out=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,external_id FROM gamenative_games WHERE lower(provider)='steam'",null)){
+            while(c.moveToNext())out.add(new GameNativeSteamLink(c.getString(0),c.getString(1)));
+        }
+        return out;
     }
 
     public void setImportedPlaytime(String game,String provider,long seconds){
