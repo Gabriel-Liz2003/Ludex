@@ -824,7 +824,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void bindGameArtwork(LudexDb.GameRow g,ImageView view){
         view.setTag(g.id);
-        String iconPkg=g.packageName!=null?g.packageName:(g.gameNative?GameNativeScanner.PACKAGE:null);
+        String iconPkg=g.packageName!=null?g.packageName:(g.gameNative?GameNativeScanner.PACKAGE:(g.eden?(db.getEdenLaunch(g.id)==null?null:db.getEdenLaunch(g.id).packageName):null));
         Drawable fallback=iconPkg==null?null:appIcon(iconPkg);
         view.setImageDrawable(fallback);
         view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
