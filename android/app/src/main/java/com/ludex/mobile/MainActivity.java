@@ -553,16 +553,30 @@ public final class MainActivity extends AppCompatActivity {
         View button=findViewById(R.id.mobile_update);button.setEnabled(false);toast("Verificando atualização…");
         io.execute(()->{
             try{
-                AndroidUpdater.UpdateInfo update=AndroidUpdater.checkLatest();
+                AndroidUpdater.UpdateCheck check=AndroidUpdater.check();
                 runOnUiThread(()->{
                     button.setEnabled(true);
-                    if(update==null){toast("Você já está na versão Android mais recente");return;}
-                    new MaterialAlertDialogBuilder(this)
-                        .setTitle("Ludex Android "+update.version)
-                        .setMessage("Versão instalada: "+BuildConfig.VERSION_NAME+"\n\nBaixar e instalar a atualização? O Android pedirá sua confirmação.")
-                        .setNegativeButton("Agora não",null)
-                        .setPositiveButton("Atualizar",(d,w)->downloadAndroidUpdate(update))
-                        .show();
+                    if(check.update!=null){
+                        String note=BuildConfig.DEBUG
+                            ?"\n\nEsta instalação é DEBUG. A primeira migração para uma release assinada pode exigir desinstalar a build debug. Exporte a biblioteca antes para não perder dados."
+                            :"";
+                        new MaterialAlertDialogBuilder(this)
+                            .setTitle("Ludex Android "+check.update.version)
+                            .setMessage("Versão instalada: "+BuildConfig.VERSION_NAME+note+"\n\nBaixar, verificar SHA-256 e abrir o instalador do Android?")
+                            .setNegativeButton("Agora não",null)
+                            .setPositiveButton("Atualizar",(d,w)->downloadAndroidUpdate(check.update))
+                            .show();
+                        return;
+                    }
+                    if(check.releaseMissing){
+                        new MaterialAlertDialogBuilder(this)
+                            .setTitle("Atualização ainda não publicada")
+                            .setMessage("O código no main já está na versão "+check.codeVersion+", mas ainda não existe uma release Android assinada com APK + SHA-256. O Ludex não vai fingir que está atualizado quando o pacote simplesmente não foi publicado.")
+                            .setPositiveButton("Entendi",null)
+                            .show();
+                        return;
+                    }
+                    toast("Você já está na versão Android mais recente ("+BuildConfig.VERSION_NAME+")");
                 });
             }catch(Exception e){runOnUiThread(()->{button.setEnabled(true);toast("Não foi possível verificar atualizações: "+e.getMessage());});}
         });
