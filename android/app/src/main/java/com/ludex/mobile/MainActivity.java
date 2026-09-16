@@ -619,6 +619,31 @@ public final class MainActivity extends AppCompatActivity {
         exportLauncher.launch(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").putExtra(Intent.EXTRA_TITLE,"ludex-sync.json"));
     }
 
+    private void bindGameArtwork(LudexDb.GameRow g,ImageView view){
+        view.setTag(g.id);
+        String iconPkg=g.packageName!=null?g.packageName:(g.gameNative?GameNativeScanner.PACKAGE:null);
+        Drawable fallback=iconPkg==null?null:appIcon(iconPkg);
+        view.setImageDrawable(fallback);
+        view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
+
+        if(!g.gameNative)return;
+        LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
+        if(launch==null)return;
+
+        final String expectedTag=g.id;
+        io.execute(()->{
+            android.graphics.Bitmap bmp=GameArtworkLoader.load(this,launch.provider,launch.externalId);
+            if(bmp==null)return;
+            runOnUiThread(()->{
+                Object tag=view.getTag();
+                if(tag!=null&&expectedTag.equals(tag.toString())){
+                    view.setImageBitmap(bmp);
+                    view.setVisibility(View.VISIBLE);
+                }
+            });
+        });
+    }
+
     Drawable appIcon(String pkg){
         try{return getPackageManager().getApplicationIcon(pkg);}catch(Exception e){return null;}
     }
@@ -659,8 +684,7 @@ public final class MainActivity extends AppCompatActivity {
             LudexDb.GameRow g=shown.get(pos);
             h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.gameNative?" · GameNative":(g.installed?" · instalado":"")));
             h.time.setText(format(g.seconds));h.status.setText(g.favorite?"★ "+g.status:g.status);
-            String iconPkg=g.packageName!=null?g.packageName:(g.gameNative?GameNativeScanner.PACKAGE:null);
-            Drawable icon=iconPkg==null?null:appIcon(iconPkg);h.icon.setImageDrawable(icon);h.icon.setVisibility(icon==null?View.INVISIBLE:View.VISIBLE);
+            bindGameArtwork(g,h.icon);
             h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative)?View.VISIBLE:View.GONE);
             h.itemView.setOnClickListener(v->click.click(g));h.play.setOnClickListener(v->launch.click(g));
         }
