@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.*;
+import rikka.shizuku.Shizuku;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.navigation.NavigationBarView;
 import com.google.android.material.snackbar.Snackbar;
@@ -40,6 +41,19 @@ public final class MainActivity extends AppCompatActivity {
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
     private File pendingUpdateApk;
+    private boolean pendingGameNativeShizuku;
+    private static final int SHIZUKU_GAMENATIVE_REQUEST=4201;
+
+    private final Shizuku.OnRequestPermissionResultListener shizukuPermissionListener=(requestCode,grantResult)->{
+        if(requestCode!=SHIZUKU_GAMENATIVE_REQUEST)return;
+        if(grantResult==PackageManager.PERMISSION_GRANTED){
+            pendingGameNativeShizuku=false;
+            syncGameNativeWithShizuku(true);
+        }else{
+            pendingGameNativeShizuku=false;
+            runOnUiThread(()->toast("Permissão do Shizuku negada"));
+        }
+    };
 
     private final ActivityResultLauncher<Uri> gameNativeTreeLauncher=registerForActivityResult(
         new ActivityResultContracts.OpenDocumentTree(), uri -> {
@@ -86,6 +100,7 @@ public final class MainActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle state){
         super.onCreate(state);
         setContentView(R.layout.activity_main);
+        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener);
         db=new LudexDb(this);
         bindViews();
         setupUi();
@@ -99,7 +114,10 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    @Override protected void onDestroy(){ super.onDestroy(); io.shutdownNow(); }
+    @Override protected void onDestroy(){
+        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
+        super.onDestroy();io.shutdownNow();
+    }
 
     private void bindViews(){
         list=findViewById(R.id.game_list);
@@ -350,13 +368,58 @@ public final class MainActivity extends AppCompatActivity {
 
     private void connectEmulatorLibrary(EmulatorRegistry.Emulator e){
         if(!GameNativeScanner.PACKAGE.equals(e.packageName))return;
-        String saved=db.getSetting("gamenative.tree_uri","");
-        if(saved.isEmpty()){
-            toast("Selecione a pasta GameNative do armazenamento");
-            gameNativeTreeLauncher.launch(null);
-        }else{
-            syncGameNativeLibrary(Uri.parse(saved),true);
+        if(Shizuku.pingBinder()){
+            try{
+                if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){
+                    syncGameNativeWithShizuku(true);
+                    return;
+                }
+                if(!Shizuku.shouldShowRequestPermissionRationale()){
+                    pendingGameNativeShizuku=true;
+                    Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
+                    toast("Autorize o Ludex no Shizuku");
+                    return;
+                }
+            }catch(Exception ignored){}
         }
+        String saved=db.getSetting("gamenative.tree_uri","");
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Biblioteca do GameNative")
+            .setMessage("O Shizuku não está ativo ou ainda não autorizou o Ludex. Você pode iniciar o Shizuku e tentar novamente, ou usar a pasta pública do GameNative.")
+            .setNegativeButton("Cancelar",null)
+            .setNeutralButton("Escolher pasta",(d,w)->{
+                if(saved.isEmpty())gameNativeTreeLauncher.launch(null);
+                else syncGameNativeLibrary(Uri.parse(saved),true);
+            })
+            .setPositiveButton("Tentar Shizuku",(d,w)->{
+                if(!Shizuku.pingBinder()){toast("Inicie o Shizuku primeiro");return;}
+                try{
+                    if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED)syncGameNativeWithShizuku(true);
+                    else Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
+                }catch(Exception ex){toast("Shizuku indisponível: "+ex.getMessage());}
+            }).show();
+    }
+
+    private void syncGameNativeWithShizuku(boolean notify){
+        if(notify)toast("Lendo GameNative com Shizuku…");
+        io.execute(()->{
+            try{
+                ShizukuGameNativeScanner.Result result=ShizukuGameNativeScanner.scan();
+                int count=db.syncGameNativeGames(result.games);
+                runOnUiThread(()->{
+                    if(count>0){
+                        toast(count+" jogos do GameNative encontrados via Shizuku");
+                        refreshAsync(false);
+                    }else if(result.shizukuUid==0){
+                        toast("Shizuku está com root, mas nenhum jogo instalado foi encontrado");
+                    }else{
+                        toast("Shizuku via ADB não acessa /data/user/0 do GameNative. Só consigo ler jogos movidos para Android/data; para a pasta privada é necessário Shizuku com root/Sui.");
+                    }
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha no Shizuku: "+e.getMessage()));
+            }
+        });
     }
 
     private void syncGameNativeLibrary(Uri uri,boolean notify){
@@ -520,7 +583,8 @@ public final class MainActivity extends AppCompatActivity {
             h.name.setText(e.name);h.pkg.setText(e.packageName);h.open.setOnClickListener(v->launch.click(e));
             h.rom.setVisibility(gameNative?View.GONE:View.VISIBLE);h.rom.setOnClickListener(v->rom.click(e));
             h.library.setVisibility(gameNative?View.VISIBLE:View.GONE);
-            h.library.setText(db.getSetting("gamenative.tree_uri","").isEmpty()?"Conectar biblioteca":"Sincronizar jogos");
+            String savedTree=db.getSetting("gamenative.tree_uri","");
+            h.library.setText(Shizuku.pingBinder()?"Ler jogos com Shizuku":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
             h.library.setOnClickListener(v->library.click(e));
         }
         public int getItemCount(){return items.size();}
