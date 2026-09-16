@@ -1,85 +1,292 @@
-# Ludex 0.9.0
+# Ludex
 
-Ludex é um launcher e biblioteca universal de jogos **local-first**, com aplicativo Windows e Android. Ele reúne instalações de múltiplos launchers, jogos manuais e ROMs em uma identidade de jogo única, acompanha sessões e playtime e continua utilizável offline.
+Ludex é uma biblioteca e launcher universal de jogos **local-first**, com aplicativo Windows e Android. O objetivo é reunir jogos instalados em diferentes launchers, títulos importados, ROMs, sessões e playtime em uma única biblioteca sem depender de um servidor proprietário para funcionar.
 
-## Funcionalidades
+**Versões atuais do projeto:**
+- Desktop Windows: **0.9.5**
+- Android: **0.9.13**
 
-### Windows
+## Destaques
 
-- biblioteca em grid ou lista, busca, filtros, favoritos, recentes e status do usuário;
-- detalhes do jogo, múltiplas instalações e escolha da cópia a iniciar;
-- cadastro manual com executável, working directory e argumentos;
-- providers para Steam, Epic Games Store, GOG, Xbox/Microsoft Store, EA App, Ubisoft Connect e Battle.net dentro do que pode ser descoberto de forma sustentável no Windows;
-- deduplicação conservadora `Game` / `Installation`, com merge e split manual;
-- ProcessMonitor independente do provider, árvore de processos, scoring, anti-cheat/launcher filtering, heartbeat, recuperação após crash e descoberta de sessões externas quando há confiança suficiente;
-- playtime medido pelo Ludex separado de playtime histórico importado;
-- coleções, metadata editável, artwork local da Steam quando disponível, achievements genéricos e estatísticas agregadas;
-- emulação integrada, scanner recursivo de ROMs, presets de emuladores, launch direto e backup seguro de saves configurados;
-- backup do banco, export/import JSON versionado e sincronização por arquivo;
-- diagnóstico de providers, banco e sessões.
+- biblioteca unificada para PC e Android;
+- importação de jogos de múltiplos providers;
+- deduplicação conservadora de títulos;
+- tracking próprio de sessões/playtime;
+- importação de playtime histórico quando a plataforma permite;
+- emulação e ROMs;
+- sync por JSON;
+- funcionamento local/offline;
+- atualizações automáticas no Desktop e Android;
+- integração Android com GameNative e Shizuku.
 
-### Android
+## Windows
 
-O app nativo em `android/` não é apenas um placeholder. Ele compila para APK e oferece:
+O aplicativo Desktop usa **Tauri 2 + Rust + TypeScript/Vite + SQLite**.
 
-- detecção de aplicativos instalados com launcher activity;
-- classificação por `ApplicationInfo.CATEGORY_GAME`, com fallback manual;
-- abertura de jogos Android;
-- leitura de uso via `UsageStatsManager` com fluxo explícito para conceder acesso de uso;
-- cálculo incremental de períodos em foreground, sem Accessibility Service ou captura de tela;
-- biblioteca, pesquisa, detalhes e estatísticas;
-- export/import de sync JSON por seletor de documentos do Android.
+### Biblioteca
 
-## Providers Windows
+- visualização em grid/lista;
+- busca, filtros, favoritos, recentes e status;
+- detalhes do jogo;
+- múltiplas instalações para a mesma identidade de jogo;
+- escolha de qual instalação iniciar;
+- jogos cadastrados manualmente com executável, diretório e argumentos;
+- merge/split manual para corrigir deduplicações.
+
+### Providers
 
 | Provider | Descoberta/importação | Launch | Tracking Ludex |
 | --- | --- | --- | --- |
-| Steam | Registro, `libraryfolders.vdf`, `appmanifest_*.acf` | `steam://rungameid` | Sim |
-| Epic | manifests `.item` locais | executável/URI disponível no manifest | Sim |
-| GOG | arquivos `goggame-*.info` e instalações DRM-free | direto quando executável está disponível | Sim |
-| Xbox / Microsoft Store | pacotes/AUMID expostos pelo Windows | `shell:AppsFolder` | Sim quando o processo pode ser associado |
-| EA App | dados/instalações locais detectáveis | mecanismo local configurado/encontrado | Sim |
-| Ubisoft Connect | Registry/instalações locais | executável/launcher configurado | Sim |
-| Battle.net | configuração local detectável | somente quando há launch target confiável | Sim quando associável |
+| Steam | Registro, `libraryfolders.vdf`, `appmanifest_*.acf` e biblioteca de conta opcional | `steam://rungameid` | Sim |
+| Epic Games Store | manifests `.item` | executável/URI do manifest | Sim |
+| GOG | `goggame-*.info` e instalações locais | direto quando disponível | Sim |
+| Xbox / Microsoft Store | pacotes/AUMID expostos pelo Windows | `shell:AppsFolder` | Quando associável |
+| EA App | dados/instalações locais detectáveis | mecanismo local disponível | Sim |
+| Ubisoft Connect | Registry/instalações locais | launcher/executável configurado | Sim |
+| Battle.net | configuração local detectável | apenas com alvo confiável | Quando associável |
 | Manual | configurado pelo usuário | executável direto | Sim |
 
-Reimportar um provider marca instalações ausentes como desinstaladas sem apagar a identidade do jogo, sessões ou histórico.
+Reimportar um provider pode marcar instalações ausentes como desinstaladas sem apagar a identidade do jogo, sessões ou histórico.
+
+### Steam
+
+O Ludex consegue:
+
+- importar instalações Steam locais;
+- identificar a conta Steam utilizada localmente;
+- ler playtime do `localconfig.vdf`;
+- usar artwork local quando disponível;
+- usar artwork moderno com fallback seguro;
+- importar opcionalmente a biblioteca completa da conta via `IPlayerService/GetOwnedGames`;
+- armazenar credenciais sensíveis no Windows usando DPAPI.
+
+### Tracking de sessões
+
+O tracking é independente do provider e inclui:
+
+- árvore de processos;
+- scoring de candidatos;
+- filtro de launchers/anti-cheat;
+- heartbeat;
+- recuperação após crash;
+- descoberta de sessões iniciadas fora do Ludex quando há confiança suficiente;
+- separação entre playtime medido pelo Ludex e playtime histórico importado.
+
+## Android
+
+O aplicativo Android em `android/` é nativo e utiliza Java + AndroidX/Material.
+
+### Jogos Android
+
+- detecção de jogos instalados;
+- classificação via `ApplicationInfo.CATEGORY_GAME`;
+- abertura direta dos aplicativos;
+- leitura de uso via `UsageStatsManager`;
+- importação de tempo em foreground;
+- ajuste manual de baseline para reconciliar históricos incompletos do Android;
+- favoritos e status;
+- biblioteca e busca;
+- export/import de sync JSON.
+
+O Android não oferece uma API pública geral para aplicativos de terceiros lerem o histórico oficial completo mostrado pela Play Store/Play Games. Por isso o Ludex usa Usage Access e permite calibrar manualmente o total quando necessário.
+
+## GameNative
+
+O Ludex possui integração específica com o **GameNative** no Android.
+
+### Importação por atalhos
+
+O GameNative publica atalhos Android para os jogos. O Ludex pode usar **Shizuku** para consultar esses shortcuts e importar somente os jogos que realmente possuem um atalho criado.
+
+O scanner reconhece atalhos no formato:
+
+```text
+game_<appid>
+```
+
+e tenta recuperar:
+
+- título;
+- `app_id`;
+- `game_source`;
+- provider/origem.
+
+Exemplos já testados incluem jogos como Hades, GRIS e Kingdom Hearts.
+
+### Launch direto
+
+Quando há metadata suficiente, o Ludex inicia o jogo diretamente pelo Intent exposto pelo GameNative:
+
+```text
+action: app.gamenative.LAUNCH_GAME
+extra: app_id
+extra: game_source
+```
+
+Assim, o botão **Jogar** abre o título diretamente no GameNative em vez de apenas abrir o launcher.
+
+### Artwork
+
+Jogos GameNative associados à Steam usam o App ID detectado para carregar artwork real da Steam.
+
+O Android:
+
+- tenta primeiro capas de biblioteca;
+- usa header como fallback;
+- mantém cache local em `files/artwork`;
+- usa o ícone do GameNative como placeholder durante o carregamento;
+- evita trocar capas entre cards reciclados do RecyclerView.
+
+Providers GameNative que não sejam Steam ainda podem usar o ícone do GameNative como fallback.
+
+### Shizuku
+
+O Shizuku é usado para consultar informações do sistema sem exigir que o Ludex tenha privilégios elevados próprios.
+
+A integração inclui:
+
+- detecção do binder do Shizuku;
+- listener de ciclo de vida do binder;
+- solicitação de autorização;
+- consulta de shortcuts via serviço do Android;
+- fallback para armazenamento quando aplicável.
+
+**Limitação:** Shizuku iniciado apenas via ADB roda normalmente como usuário `shell` e não consegue acessar livremente `/data/user/0/app.gamenative`. A integração por shortcuts existe justamente para evitar depender dessa pasta privada.
 
 ## Emulação
 
-A arquitetura é genérica e possui presets para RetroArch, Dolphin, PCSX2, RPCS3, PPSSPP, DuckStation, Cemu, Ryujinx/alternativas configuráveis, melonDS e mGBA. O usuário fornece os próprios emuladores, ROMs e BIOS legalmente obtidos.
+A arquitetura Desktop possui presets/adapters para emuladores como:
 
-O scanner suporta recursão, hash SHA-256, deduplicação e formatos comuns como `iso`, `chd`, `cue`, `bin`, `rvz`, `wbfs`, `gba`, `gbc`, `nds`, `3ds`, `nsp`, `xci`, `nes`, `snes`, `n64`, `z64`, `v64` e `pbp`. Extensões ambíguas não são usadas sozinhas para inferir plataforma.
+- RetroArch;
+- Dolphin;
+- PCSX2;
+- RPCS3;
+- PPSSPP;
+- DuckStation;
+- Cemu;
+- Ryujinx/alternativas configuráveis;
+- melonDS;
+- mGBA.
 
-## Metadata
+No Android, emuladores instalados também podem aparecer em uma área própria da interface.
 
-`MetadataProvider` separa a origem da metadata do domínio principal. A 0.9.0 inclui metadata manual com prioridade e provider local de artwork da Steam usando apenas o cache existente no computador. Overrides manuais não são sobrescritos por refresh automático. O schema já mantém capa, hero, descrição, developer, publisher, data, gêneros, plataformas e screenshots/cache.
+O usuário deve fornecer legalmente seus próprios emuladores, ROMs e BIOS.
+
+O scanner Desktop suporta formatos como:
+
+`iso`, `chd`, `cue`, `bin`, `rvz`, `wbfs`, `gba`, `gbc`, `nds`, `3ds`, `nsp`, `xci`, `nes`, `snes`, `n64`, `z64`, `v64` e `pbp`.
+
+## Metadata e artwork
+
+A camada de metadata é separada do domínio principal.
+
+O projeto mantém suporte para:
+
+- capa;
+- hero;
+- descrição;
+- developer;
+- publisher;
+- data;
+- gêneros;
+- plataformas;
+- screenshots;
+- cache local;
+- overrides manuais.
+
+Overrides feitos pelo usuário têm prioridade sobre refresh automático.
 
 ## Sync, backup e offline
 
-Ludex não exige conta ou servidor proprietário. O formato JSON de sync é versionado e usa IDs estáveis. Ele transporta jogos, instalações, sessões, metadata, favoritos/status, coleções e playtime importado, evitando recriar sessões com IDs já existentes. Campos sincronizáveis possuem timestamps para evitar sobrescrita cega de versões mais novas.
+O Ludex não exige uma conta própria.
 
-O Desktop continua navegável, pesquisável e capaz de lançar jogos, emular, registrar sessões, editar metadata/coleções e mostrar estatísticas sem internet. O Android também mantém os dados locais e usa arquivo para troca de sync.
+O formato JSON de sync é versionado e pode transportar:
 
-## Contas PlayStation e Xbox
+- jogos;
+- instalações;
+- sessões;
+- playtime importado;
+- favoritos;
+- status;
+- metadata compatível.
 
-Ludex **não inventa APIs de conta**. As APIs oficiais Xbox Live pesquisadas exigem contexto de título/XSTS/assinatura e o endpoint oficial de histórico disponível publicamente é orientado a títulos com progresso de achievements, não a uma biblioteca completa arbitrária. A documentação pública PlayStation encontrada não fornece uma API geral de biblioteca de usuário para launchers de terceiros. Por isso a 0.9.0 mantém essas bibliotecas de conta em fallback manual/importável, enquanto o provider Xbox PC local funciona normalmente para instalações expostas pelo Windows.
+O Desktop continua utilizável offline para navegação, launch, tracking e operações locais. O Android também mantém sua biblioteca localmente.
+
+## Atualizações
+
+### Desktop
+
+O Desktop Windows consulta as Releases do GitHub, baixa o instalador mais recente e inicia a atualização.
+
+O workflow `release.yml` publica releases Desktop quando uma nova versão válida chega ao `main`.
+
+### Android
+
+A partir da linha **0.9.12+**, o Android possui fluxo de atualização assinado.
+
+O processo é:
+
+1. o app consulta Releases do GitHub;
+2. procura tags `android-v<versão>`;
+3. seleciona a versão válida mais recente;
+4. baixa o APK;
+5. baixa o arquivo SHA-256;
+6. verifica a integridade localmente;
+7. abre o instalador do Android.
+
+O workflow `.github/workflows/android-release.yml`:
+
+- exige uma chave persistente;
+- gera APK release;
+- valida assinatura com `apksigner`;
+- publica APK + SHA-256;
+- cria releases no formato `android-vX.Y.Z`.
+
+Os secrets necessários são:
+
+```text
+ANDROID_KEYSTORE_BASE64
+ANDROID_STORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
+Mais detalhes em `android/SIGNING.md`.
+
+### Migração de builds debug antigas
+
+Builds antigas do CI eram assinadas com chave debug. Android não permite atualizar diretamente um APK quando o certificado muda.
+
+Na primeira migração para uma release assinada:
+
+1. exporte a biblioteca/sync;
+2. desinstale a build debug se o Android recusar a instalação;
+3. instale a release assinada;
+4. importe o backup.
+
+Depois dessa migração, futuras releases assinadas podem atualizar a instalação existente normalmente.
 
 ## Privacidade e segurança
 
 - dados locais em SQLite;
-- sem telemetria obrigatória, anúncios ou venda de dados;
-- launch usa `Command` com argumentos tokenizados, não concatenação de shell para executáveis manuais;
-- URIs de providers são produzidas por código específico do provider;
-- manifests corrompidos são ignorados/reportados em vez de causar panic no scan;
-- backups de saves recusam restauração destrutiva sobre destino existente;
-- segredos/tokens não são hardcoded.
+- sem telemetria obrigatória;
+- sem anúncios;
+- sem venda de dados;
+- segredos não são hardcoded;
+- APK Android release usa assinatura persistente;
+- updater Android verifica SHA-256 antes da instalação;
+- execução manual no Desktop usa argumentos tokenizados;
+- manifests corrompidos são ignorados/reportados em vez de derrubar scans completos.
 
 ## Build
 
-### Windows
+### Desktop Windows
 
-Pré-requisitos: Node.js 22+, Rust stable e dependências do Tauri 2 para Windows.
+Pré-requisitos:
+
+- Node.js 22+;
+- Rust stable;
+- dependências do Tauri 2 para Windows.
 
 ```bash
 npm install
@@ -90,63 +297,101 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri -- build --bundles nsis
 ```
 
-O instalador é gerado em `src-tauri/target/release/bundle/nsis/`.
+O instalador é gerado em:
 
-### Android
+```text
+src-tauri/target/release/bundle/nsis/
+```
 
-Pré-requisitos: JDK 17 e Android SDK.
+### Android debug
+
+Pré-requisitos:
+
+- JDK 17;
+- Android SDK.
 
 ```bash
 gradle -p android :app:assembleDebug
 ```
 
-APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
-
-GitHub Actions executa frontend, Rust, harness real de processos no Windows, Android e empacotamento NSIS, publicando os artifacts `ludex-android-debug` e `ludex-windows`.
-
-## Desenvolvimento
-
-```bash
-npm install
-npm run tauri dev
-```
-
-Estrutura principal:
+APK:
 
 ```text
-src/                              UI Desktop
-src-tauri/src/db.rs               schema base e biblioteca
-src-tauri/src/product.rs          domínio de produto/migrations/stats/sync
-src-tauri/src/providers/          providers Windows
-src-tauri/src/process_monitor.rs  descoberta e classificação de processos
-src-tauri/src/sessions.rs         lifecycle de sessões
-src-tauri/src/emulation/          adapters e argumentos
-src-tauri/src/metadata.rs         metadata providers
-android/                          aplicativo Android nativo
-docs/                             documentação técnica
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Android release
+
+Com a assinatura configurada:
+
+```bash
+gradle -p android :app:assembleRelease
+```
+
+O pipeline oficial utiliza `android-release.yml`.
+
+## CI
+
+GitHub Actions valida:
+
+- frontend;
+- Rust;
+- process harness;
+- pacote Windows;
+- Android debug;
+- Android release assinado.
+
+Artifacts e releases são produzidos apenas quando os jobs correspondentes passam.
+
+## Estrutura
+
+```text
+src/                                      UI Desktop
+src-tauri/src/db.rs                       schema base e biblioteca
+src-tauri/src/product.rs                  domínio/migrations/stats/sync
+src-tauri/src/providers/                  providers Windows
+src-tauri/src/process_monitor.rs          descoberta/classificação de processos
+src-tauri/src/sessions.rs                 lifecycle de sessões
+src-tauri/src/emulation/                  adapters de emulação
+src-tauri/src/metadata.rs                 metadata providers
+android/                                  aplicativo Android
+android/app/src/main/java/com/ludex/mobile/
+                                          código nativo Android
+android/SIGNING.md                        assinatura e releases Android
+docs/                                     documentação técnica
 ```
 
 ## Limitações conhecidas
 
-- CI valida manifests e providers com fixtures/dados sintéticos; ele não possui contas ou bibliotecas reais de todos os launchers comerciais.
-- Apps MSIX protegidos podem ocultar executáveis e exigir launch por AUMID; associação de processo depende do que o Windows expõe.
-- Alguns launchers globais/anti-cheats podem impedir associação confiável; nesses casos o Ludex prefere não contar a sessão a registrar horas falsas.
-- Metadata externa que exige credencial de serviço não possui segredo embutido; a 0.9.0 usa cache Steam local e edição manual.
-- PlayStation/Xbox account library permanece limitada pelas APIs oficiais disponíveis para aplicativos de terceiros.
+- CI não possui contas reais de todos os launchers comerciais;
+- alguns launchers/anti-cheats dificultam associação confiável de processos;
+- apps MSIX podem ocultar executáveis;
+- PlayStation/Xbox não oferecem uma API pública geral que permita importar arbitrariamente toda a biblioteca de usuário;
+- histórico de jogo Android disponibilizado a terceiros é incompleto;
+- Shizuku via ADB não concede acesso irrestrito às pastas privadas de outros apps;
+- artwork GameNative automático está atualmente focado em jogos Steam com App ID conhecido.
 
-Mais detalhes: `docs/ARCHITECTURE.md`, `docs/PROVIDERS.md`, `docs/EMULATION.md`, `docs/SYNC.md` e `docs/PROCESS_TRACKING.md`.
+## Releases recentes
 
-## Atualizações Desktop
+### Android 0.9.13
 
-A partir da versão 0.9.1, o Desktop Windows consulta as Releases oficiais deste repositório, baixa o instalador da versão mais recente dentro do próprio Ludex e inicia a atualização. O workflow `release.yml` publica automaticamente uma nova release quando `main` recebe uma versão ainda não publicada.
+- importação de shortcuts do GameNative;
+- launch direto por Intent;
+- artwork real da Steam para jogos GameNative;
+- cache local de imagens;
+- updater assinado e fluxo de release automatizado.
 
-A versão 0.9.1 também enriquece a importação Steam sem exigir chave de API: o Ludex lê o `localconfig.vdf` da conta Steam local mais recentemente usada para importar `Playtime` e usa primeiro o artwork local do cache, com fallback para o CDN oficial da Steam.
+### Desktop 0.9.5
 
+- base atual do aplicativo Windows e integração com as melhorias recentes de biblioteca, tracking, providers e Steam.
 
+## Documentação
 
-## 0.9.2
+Consulte também:
 
-- Steam: corrige artwork moderno (`library_capsule`) e adiciona resolver com fallback seguro.
-- Steam Account: importação opcional da biblioteca completa via `IPlayerService/GetOwnedGames`, incluindo jogos não instalados e playtime histórico. A chave é fornecida pelo usuário e protegida com DPAPI no Windows.
-- Loja: catálogo Steam para o Brasil, preço Steam, ofertas individuais de lojas oficiais via IsThereAnyDeal e melhor preço de lojas/keyshops via GG.deals. Sem scraping de marketplaces.
-- Eneba/Instant Gaming: APIs públicas de consumidor não estão disponíveis; quando cobertas pelo GG.deals entram no comparador agregado e no link detalhado.
+- `docs/ARCHITECTURE.md`
+- `docs/PROVIDERS.md`
+- `docs/EMULATION.md`
+- `docs/SYNC.md`
+- `docs/PROCESS_TRACKING.md`
+- `android/SIGNING.md`
