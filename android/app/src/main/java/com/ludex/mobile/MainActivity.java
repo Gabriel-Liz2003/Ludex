@@ -42,8 +42,10 @@ public final class MainActivity extends AppCompatActivity {
     private String pendingEmulatorPackage;
     private File pendingUpdateApk;
     private boolean pendingGameNativeShizuku;
+    private boolean pendingEdenShizuku;
     private boolean shizukuBinderReady;
     private static final int SHIZUKU_GAMENATIVE_REQUEST=4201;
+    private static final int SHIZUKU_EDEN_REQUEST=4202;
 
     private final Shizuku.OnBinderReceivedListener shizukuBinderReceivedListener=()->{
         shizukuBinderReady=true;
@@ -62,6 +64,18 @@ public final class MainActivity extends AppCompatActivity {
                 toast("Shizuku conectado, mas a autorização falhou: "+e.getMessage());
             }
         }
+        if(pendingEdenShizuku){
+            pendingEdenShizuku=false;
+            try{
+                if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){
+                    syncEdenWithShizuku(true);
+                }else if(!Shizuku.shouldShowRequestPermissionRationale()){
+                    Shizuku.requestPermission(SHIZUKU_EDEN_REQUEST);
+                }
+            }catch(Exception e){
+                toast("Shizuku conectado, mas o Eden falhou: "+e.getMessage());
+            }
+        }
     };
 
     private final Shizuku.OnBinderDeadListener shizukuBinderDeadListener=()->{
@@ -70,13 +84,16 @@ public final class MainActivity extends AppCompatActivity {
     };
 
     private final Shizuku.OnRequestPermissionResultListener shizukuPermissionListener=(requestCode,grantResult)->{
-        if(requestCode!=SHIZUKU_GAMENATIVE_REQUEST)return;
-        if(grantResult==PackageManager.PERMISSION_GRANTED){
+        if(requestCode==SHIZUKU_GAMENATIVE_REQUEST){
             pendingGameNativeShizuku=false;
-            syncGameNativeWithShizuku(true);
-        }else{
-            pendingGameNativeShizuku=false;
-            runOnUiThread(()->toast("Permissão do Shizuku negada"));
+            if(grantResult==PackageManager.PERMISSION_GRANTED)syncGameNativeWithShizuku(true);
+            else runOnUiThread(()->toast("Permissão do Shizuku negada"));
+            return;
+        }
+        if(requestCode==SHIZUKU_EDEN_REQUEST){
+            pendingEdenShizuku=false;
+            if(grantResult==PackageManager.PERMISSION_GRANTED)syncEdenWithShizuku(true);
+            else runOnUiThread(()->toast("Permissão do Shizuku negada"));
         }
     };
 
@@ -341,7 +358,7 @@ public final class MainActivity extends AppCompatActivity {
                 (g.packageName!=null?"\nApp: "+g.packageName:""))
             .setNeutralButton(g.favorite?"Remover favorito":"Favoritar",(d,w)->{db.setFavorite(g.id,!g.favorite);refreshAsync(false);})
             .setNegativeButton("Mais",(d,w)->showGameActions(g))
-            .setPositiveButton(g.installed&&(g.packageName!=null||g.gameNative)?"JOGAR":"Fechar",(d,w)->{if(g.installed&&(g.packageName!=null||g.gameNative))launchGame(g);})
+            .setPositiveButton(g.installed&&(g.packageName!=null||g.gameNative||g.eden)?"JOGAR":"Fechar",(d,w)->{if(g.installed&&(g.packageName!=null||g.gameNative||g.eden))launchGame(g);})
             .show();
     }
 
@@ -407,8 +424,27 @@ public final class MainActivity extends AppCompatActivity {
                 }
             }
         }
+        if(g.eden){
+            LudexDb.EdenLaunch launch=db.getEdenLaunch(g.id);
+            if(launch!=null){
+                try{
+                    Intent direct=new Intent(Intent.ACTION_VIEW)
+                        .setData(Uri.parse(launch.uri))
+                        .setClassName(launch.packageName,EdenShortcutScanner.ACTIVITY)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(direct);
+                    return;
+                }catch(Exception ex){
+                    toast("Falha ao abrir o jogo no Eden");
+                }
+            }
+        }
         String pkg=g.packageName;
         if(pkg==null&&g.gameNative)pkg=GameNativeScanner.PACKAGE;
+        if(pkg==null&&g.eden){
+            LudexDb.EdenLaunch launch=db.getEdenLaunch(g.id);
+            if(launch!=null)pkg=launch.packageName;
+        }
         if(pkg==null)return;
         Intent i=getPackageManager().getLaunchIntentForPackage(pkg);
         if(i==null){toast("Este jogo não expõe uma activity de inicialização");return;}
@@ -421,16 +457,25 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void connectEmulatorLibrary(EmulatorRegistry.Emulator e){
-        if(!GameNativeScanner.PACKAGE.equals(e.packageName))return;
+        boolean gameNative=GameNativeScanner.PACKAGE.equals(e.packageName);
+        boolean eden=EdenShortcutScanner.STANDARD_PACKAGE.equals(e.packageName)||EdenShortcutScanner.OPTIMIZED_PACKAGE.equals(e.packageName);
+        if(!gameNative&&!eden)return;
+
         shizukuBinderReady=Shizuku.pingBinder();
         if(shizukuBinderReady){
             try{
                 if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){
-                    syncGameNativeWithShizuku(true);
+                    if(gameNative)syncGameNativeWithShizuku(true); else syncEdenWithShizuku(true);
                     return;
                 }
                 if(!Shizuku.shouldShowRequestPermissionRationale()){
-                    Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
+                    if(gameNative){
+                        pendingGameNativeShizuku=true;
+                        Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
+                    }else{
+                        pendingEdenShizuku=true;
+                        Shizuku.requestPermission(SHIZUKU_EDEN_REQUEST);
+                    }
                     toast("Autorize o Ludex no Shizuku");
                     return;
                 }
@@ -438,25 +483,36 @@ public final class MainActivity extends AppCompatActivity {
                 toast("Shizuku conectado, mas falhou: "+ex.getMessage());
             }
         }else{
-            pendingGameNativeShizuku=true;
+            if(gameNative)pendingGameNativeShizuku=true; else pendingEdenShizuku=true;
             toast("Aguardando o binder do Shizuku…");
             new Handler(Looper.getMainLooper()).postDelayed(()->{
-                if(!pendingGameNativeShizuku)return;
+                boolean pending=gameNative?pendingGameNativeShizuku:pendingEdenShizuku;
+                if(!pending)return;
                 if(Shizuku.pingBinder()){
                     shizukuBinderReady=true;
-                    pendingGameNativeShizuku=false;
+                    if(gameNative)pendingGameNativeShizuku=false; else pendingEdenShizuku=false;
                     try{
-                        if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED)syncGameNativeWithShizuku(true);
-                        else Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
+                        if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){
+                            if(gameNative)syncGameNativeWithShizuku(true); else syncEdenWithShizuku(true);
+                        }else{
+                            Shizuku.requestPermission(gameNative?SHIZUKU_GAMENATIVE_REQUEST:SHIZUKU_EDEN_REQUEST);
+                        }
                     }catch(Exception ex){toast("Shizuku indisponível: "+ex.getMessage());}
                 }else{
-                    pendingGameNativeShizuku=false;
-                    showGameNativeFallback();
+                    if(gameNative){
+                        pendingGameNativeShizuku=false;
+                        showGameNativeFallback();
+                    }else{
+                        pendingEdenShizuku=false;
+                        toast("Inicie o Shizuku e tente importar os atalhos do Eden novamente");
+                    }
                 }
             },2500);
             return;
         }
-        showGameNativeFallback();
+
+        if(gameNative)showGameNativeFallback();
+        else toast("O Ludex precisa do Shizuku para ler os atalhos individuais do Eden");
     }
 
     private void showGameNativeFallback(){
@@ -478,6 +534,26 @@ public final class MainActivity extends AppCompatActivity {
                     }catch(Exception ex){toast("Shizuku indisponível: "+ex.getMessage());}
                 }else toast("Binder do Shizuku ainda não chegou ao Ludex");
             }).show();
+    }
+
+    private void syncEdenWithShizuku(boolean notify){
+        if(notify)toast("Procurando atalhos de jogos do Eden…");
+        io.execute(()->{
+            try{
+                List<EdenShortcutScanner.ShortcutGame> shortcuts=EdenShortcutScanner.scan();
+                int count=db.syncEdenGames(shortcuts);
+                runOnUiThread(()->{
+                    if(count>0){
+                        toast(count+" jogos do Eden importados individualmente");
+                        refreshAsync(false);
+                    }else{
+                        toast("Nenhum atalho de jogo do Eden foi encontrado. No Eden, crie um atalho para cada jogo e tente novamente.");
+                    }
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha ao ler atalhos do Eden: "+e.getMessage()));
+            }
+        });
     }
 
     private void syncGameNativeWithShizuku(boolean notify){
@@ -791,10 +867,10 @@ public final class MainActivity extends AppCompatActivity {
         @NonNull public Holder onCreateViewHolder(@NonNull android.view.ViewGroup p,int t){return new Holder(getLayoutInflater().inflate(R.layout.item_game,p,false));}
         public void onBindViewHolder(@NonNull Holder h,int pos){
             LudexDb.GameRow g=shown.get(pos);
-            h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.gameNative?" · GameNative":(g.installed?" · instalado":"")));
+            h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.gameNative?" · GameNative":(g.eden?" · Eden":(g.installed?" · instalado":""))));
             h.time.setText(format(g.seconds));h.status.setText(g.favorite?"★ "+g.status:g.status);
             bindGameArtwork(g,h.icon);
-            h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative)?View.VISIBLE:View.GONE);
+            h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative||g.eden)?View.VISIBLE:View.GONE);
             h.itemView.setOnClickListener(v->click.click(g));h.play.setOnClickListener(v->launch.click(g));
         }
         public int getItemCount(){return shown.size();}
@@ -812,13 +888,16 @@ public final class MainActivity extends AppCompatActivity {
         void setAll(List<EmulatorRegistry.Emulator> x){items.clear();items.addAll(x);notifyDataSetChanged();}
         @NonNull public Holder onCreateViewHolder(@NonNull android.view.ViewGroup p,int t){return new Holder(getLayoutInflater().inflate(R.layout.item_emulator,p,false));}
         public void onBindViewHolder(@NonNull Holder h,int pos){
-            EmulatorRegistry.Emulator e=items.get(pos);boolean gameNative=GameNativeScanner.PACKAGE.equals(e.packageName);
+            EmulatorRegistry.Emulator e=items.get(pos);
+            boolean gameNative=GameNativeScanner.PACKAGE.equals(e.packageName);
+            boolean eden=EdenShortcutScanner.STANDARD_PACKAGE.equals(e.packageName)||EdenShortcutScanner.OPTIMIZED_PACKAGE.equals(e.packageName);
             h.name.setText(e.name);h.pkg.setText(e.packageName);h.open.setOnClickListener(v->launch.click(e));
-            h.rom.setVisibility(gameNative?View.GONE:View.VISIBLE);h.rom.setOnClickListener(v->rom.click(e));
-            h.library.setVisibility(gameNative?View.VISIBLE:View.GONE);
+            h.rom.setVisibility((gameNative||eden)?View.GONE:View.VISIBLE);h.rom.setOnClickListener(v->rom.click(e));
+            h.library.setVisibility((gameNative||eden)?View.VISIBLE:View.GONE);
             String savedTree=db.getSetting("gamenative.tree_uri","");
             boolean binder=shizukuBinderReady||Shizuku.pingBinder();
-            h.library.setText(binder?"Importar atalhos do GameNative":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
+            if(eden)h.library.setText(binder?"Importar jogos do Eden":"Conectar Shizuku para ler Eden");
+            else h.library.setText(binder?"Importar atalhos do GameNative":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
             h.library.setOnClickListener(v->library.click(e));
         }
         public int getItemCount(){return items.size();}
