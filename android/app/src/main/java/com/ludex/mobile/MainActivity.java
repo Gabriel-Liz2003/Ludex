@@ -29,18 +29,21 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public final class MainActivity extends AppCompatActivity {
-    private enum Tab { LIBRARY, ANDROID, EMULATORS, SYNC }
+    private enum Tab { LIBRARY, ANDROID, EMULATED, EMULATORS, SYNC }
     private LudexDb db;
     private RecyclerView list;
     private TextInputEditText search;
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo, steamSyncInfo;
+    private TextView summary, syncInfo, steamSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
     private String pendingEdenPackage;
+    private String pendingLibraryEmulatorPackage;
+    private String activeEmulatedGameId,activeEmulatorPackage;
+    private long activeEmulatedStartedAt;
     private File pendingUpdateApk;
     private boolean pendingGameNativeShizuku;
     private boolean pendingEdenShizuku;
@@ -118,6 +121,18 @@ public final class MainActivity extends AppCompatActivity {
             syncEdenLibrary(uri,pkg,true);
         });
 
+    private final ActivityResultLauncher<Uri> emulatorTreeLauncher=registerForActivityResult(
+        new ActivityResultContracts.OpenDocumentTree(), uri -> {
+            String pkg=pendingLibraryEmulatorPackage;
+            pendingLibraryEmulatorPackage=null;
+            if(uri==null||pkg==null)return;
+            try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+            catch(Exception ignored){}
+            db.setSetting("emulator.tree_uri."+pkg,uri.toString());
+            EmulatorRegistry.Emulator e=EmulatorRegistry.get(pkg);
+            if(e!=null)syncGenericEmulatorLibrary(uri,e,true);
+        });
+
     private final ActivityResultLauncher<Intent> importLauncher=registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(), r -> {
             if(r.getResultCode()!=RESULT_OK||r.getData()==null||r.getData().getData()==null)return;
@@ -166,6 +181,12 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onResume(){
         super.onResume();
+        if(activeEmulatedGameId!=null&&activeEmulatedStartedAt>0){
+            long end=System.currentTimeMillis();
+            db.recordSession(activeEmulatedGameId,activeEmulatorPackage,activeEmulatedStartedAt,end,"emulator");
+            activeEmulatedGameId=null;activeEmulatorPackage=null;activeEmulatedStartedAt=0;
+            refreshAsync(false);
+        }
         shizukuBinderReady=Shizuku.pingBinder();
         if(emulatorAdapter!=null)emulatorAdapter.notifyDataSetChanged();
         if(pendingUpdateApk!=null && Build.VERSION.SDK_INT>=26 && getPackageManager().canRequestPackageInstalls()){
@@ -187,6 +208,7 @@ public final class MainActivity extends AppCompatActivity {
         syncPanel=findViewById(R.id.sync_panel);
         syncInfo=findViewById(R.id.sync_info);
         steamSyncInfo=findViewById(R.id.steam_sync_info);
+        artworkInfo=findViewById(R.id.artwork_info);
         emptyState=findViewById(R.id.empty_state);
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setItemAnimator(new DefaultItemAnimator());
@@ -203,6 +225,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
         findViewById(R.id.steam_config).setOnClickListener(v->showSteamConfig());
         findViewById(R.id.steam_sync).setOnClickListener(v->syncSteamPlaytime(true));
+        findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
         findViewById(R.id.mobile_update).setOnClickListener(v->checkForAndroidUpdate());
 
         search.addTextChangedListener(new SimpleTextWatcher(s->renderCurrent()));
@@ -211,6 +234,7 @@ public final class MainActivity extends AppCompatActivity {
             int id=item.getItemId();
             if(id==R.id.nav_library)tab=Tab.LIBRARY;
             else if(id==R.id.nav_android)tab=Tab.ANDROID;
+            else if(id==R.id.nav_emulated)tab=Tab.EMULATED;
             else if(id==R.id.nav_emulators)tab=Tab.EMULATORS;
             else tab=Tab.SYNC;
             renderCurrent();
@@ -250,12 +274,13 @@ public final class MainActivity extends AppCompatActivity {
         boolean sync=tab==Tab.SYNC;
         syncPanel.setVisibility(sync?View.VISIBLE:View.GONE);
         list.setVisibility(sync?View.GONE:View.VISIBLE);
-        search.setVisibility((tab==Tab.LIBRARY||tab==Tab.ANDROID)?View.VISIBLE:View.GONE);
+        search.setVisibility((tab==Tab.LIBRARY||tab==Tab.ANDROID||tab==Tab.EMULATED)?View.VISIBLE:View.GONE);
         emptyState.setVisibility(View.GONE);
         if(sync){
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
                 "O Android não expõe o histórico oficial do Google Play; o Ludex usa Usage Access para medir o tempo em primeiro plano dos jogos neste aparelho e sincroniza esse tempo com o PC.");
             updateSteamSyncInfo();
+            updateArtworkInfo();
             return;
         }
         if(tab==Tab.EMULATORS){
@@ -265,14 +290,19 @@ public final class MainActivity extends AppCompatActivity {
         }
         list.setAdapter(gameAdapter);
         String q=search.getText()==null?"":search.getText().toString();
-        gameAdapter.filter(q,tab==Tab.ANDROID);
+        gameAdapter.filter(q,tab);
         emptyState.setVisibility(gameAdapter.getItemCount()==0?View.VISIBLE:View.GONE);
     }
 
     private void updateSummary(List<LudexDb.GameRow> games){
-        int android=0,remote=0; long seconds=0;
-        for(LudexDb.GameRow g:games){if("android".equals(g.source))android++;else remote++;seconds+=g.seconds;}
-        summary.setText(games.size()+" jogos · "+android+" Android · "+remote+" do PC · "+format(seconds));
+        int android=0,emulated=0,other=0; long seconds=0;
+        for(LudexDb.GameRow g:games){
+            if("android".equals(g.source))android++;
+            else if(g.emulated)emulated++;
+            else other++;
+            seconds+=g.seconds;
+        }
+        summary.setText(games.size()+" jogos · "+android+" Android · "+emulated+" emulados · "+other+" outros · "+format(seconds));
     }
 
     private void scanInstalledGames(){
@@ -431,37 +461,52 @@ public final class MainActivity extends AppCompatActivity {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     startActivity(direct);
                     return;
-                }catch(Exception ex){
-                    toast("Falha no lançamento direto; abrindo GameNative");
-                }
+                }catch(Exception ex){toast("Falha no lançamento direto; abrindo GameNative");}
             }
         }
+
         if(g.eden){
             LudexDb.EdenLaunch launch=db.getEdenLaunch(g.id);
             if(launch!=null){
                 try{
+                    markEmulatedLaunch(g.id,launch.packageName);
                     Intent direct=new Intent(Intent.ACTION_VIEW)
                         .setData(Uri.parse(launch.uri))
                         .setClassName(launch.packageName,EdenShortcutScanner.ACTIVITY)
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     startActivity(direct);
                     return;
-                }catch(Exception ex){
-                    toast("Falha ao abrir o jogo no Eden");
-                }
+                }catch(Exception ex){clearEmulatedLaunch();toast("Falha ao abrir o jogo no Eden");}
             }
         }
+
+        if(g.emulated){
+            LudexDb.EmulatorLaunch launch=db.getEmulatorLaunch(g.id);
+            if(launch!=null){
+                try{
+                    markEmulatedLaunch(g.id,launch.packageName);
+                    Intent direct=new Intent(Intent.ACTION_VIEW)
+                        .setData(Uri.parse(launch.uri))
+                        .setPackage(launch.packageName)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(direct);
+                    return;
+                }catch(Exception ex){clearEmulatedLaunch();toast("Falha ao abrir o jogo no emulador");}
+            }
+        }
+
         String pkg=g.packageName;
         if(pkg==null&&g.gameNative)pkg=GameNativeScanner.PACKAGE;
-        if(pkg==null&&g.eden){
-            LudexDb.EdenLaunch launch=db.getEdenLaunch(g.id);
-            if(launch!=null)pkg=launch.packageName;
-        }
         if(pkg==null)return;
         Intent i=getPackageManager().getLaunchIntentForPackage(pkg);
         if(i==null){toast("Este jogo não expõe uma activity de inicialização");return;}
         startActivity(i);
     }
+
+    private void markEmulatedLaunch(String gameId,String packageName){
+        activeEmulatedGameId=gameId;activeEmulatorPackage=packageName;activeEmulatedStartedAt=System.currentTimeMillis();
+    }
+    private void clearEmulatedLaunch(){activeEmulatedGameId=null;activeEmulatorPackage=null;activeEmulatedStartedAt=0;}
 
     private void launchEmulator(EmulatorRegistry.Emulator e){
         Intent i=getPackageManager().getLaunchIntentForPackage(e.packageName);
@@ -471,56 +516,34 @@ public final class MainActivity extends AppCompatActivity {
     private void connectEmulatorLibrary(EmulatorRegistry.Emulator e){
         boolean gameNative=GameNativeScanner.PACKAGE.equals(e.packageName);
         boolean eden=EdenShortcutScanner.STANDARD_PACKAGE.equals(e.packageName)||EdenShortcutScanner.OPTIMIZED_PACKAGE.equals(e.packageName);
-        if(!gameNative&&!eden)return;
-
-        if(eden){
-            String saved=db.getSetting("eden.tree_uri."+e.packageName,"");
-            if(saved.isEmpty()){
-                pendingEdenPackage=e.packageName;
-                toast("Selecione a pasta onde ficam seus jogos de Nintendo Switch");
-                edenTreeLauncher.launch(null);
-            }else{
-                syncEdenLibrary(Uri.parse(saved),e.packageName,true);
+        if(gameNative){
+            shizukuBinderReady=Shizuku.pingBinder();
+            if(shizukuBinderReady){
+                try{
+                    if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){syncGameNativeWithShizuku(true);return;}
+                    if(!Shizuku.shouldShowRequestPermissionRationale()){
+                        pendingGameNativeShizuku=true;Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);toast("Autorize o Ludex no Shizuku");return;
+                    }
+                }catch(Exception ex){toast("Shizuku conectado, mas falhou: "+ex.getMessage());}
             }
+            showGameNativeFallback();return;
+        }
+
+        if(e.isMultiSystem()){
+            toast("RetroArch é multi-system: conecte bibliotecas por console em uma etapa futura.");
             return;
         }
 
-        shizukuBinderReady=Shizuku.pingBinder();
-        if(shizukuBinderReady){
-            try{
-                if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){
-                    syncGameNativeWithShizuku(true);
-                    return;
-                }
-                if(!Shizuku.shouldShowRequestPermissionRationale()){
-                    pendingGameNativeShizuku=true;
-                    Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
-                    toast("Autorize o Ludex no Shizuku");
-                    return;
-                }
-            }catch(Exception ex){
-                toast("Shizuku conectado, mas falhou: "+ex.getMessage());
-            }
+        String key=(eden?"eden.tree_uri.":"emulator.tree_uri.")+e.packageName;
+        String saved=db.getSetting(key,"");
+        if(saved.isEmpty()){
+            if(eden)pendingEdenPackage=e.packageName;else pendingLibraryEmulatorPackage=e.packageName;
+            toast("Selecione a pasta de jogos de "+e.platform);
+            if(eden)edenTreeLauncher.launch(null);else emulatorTreeLauncher.launch(null);
         }else{
-            pendingGameNativeShizuku=true;
-            toast("Aguardando o binder do Shizuku…");
-            new Handler(Looper.getMainLooper()).postDelayed(()->{
-                if(!pendingGameNativeShizuku)return;
-                if(Shizuku.pingBinder()){
-                    shizukuBinderReady=true;
-                    pendingGameNativeShizuku=false;
-                    try{
-                        if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED)syncGameNativeWithShizuku(true);
-                        else Shizuku.requestPermission(SHIZUKU_GAMENATIVE_REQUEST);
-                    }catch(Exception ex){toast("Shizuku indisponível: "+ex.getMessage());}
-                }else{
-                    pendingGameNativeShizuku=false;
-                    showGameNativeFallback();
-                }
-            },2500);
-            return;
+            if(eden)syncEdenLibrary(Uri.parse(saved),e.packageName,true);
+            else syncGenericEmulatorLibrary(Uri.parse(saved),e,true);
         }
-        showGameNativeFallback();
     }
 
     private void showGameNativeFallback(){
@@ -560,6 +583,7 @@ public final class MainActivity extends AppCompatActivity {
             try{
                 List<EdenLibraryScanner.ImportedGame> found=EdenLibraryScanner.scan(this,uri,packageName);
                 int count=db.syncEdenGames(found);
+                importEdenPlaytime(packageName);
                 runOnUiThread(()->{
                     if(count>0)toast(count+" jogos do Eden encontrados");
                     else toast("Nenhuma ROM .xci/.nsp/.nca/.nro encontrada nessa pasta");
@@ -572,6 +596,38 @@ public final class MainActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    private void syncGenericEmulatorLibrary(Uri uri,EmulatorRegistry.Emulator emulator,boolean notify){
+        if(notify)toast("Lendo "+emulator.platform+"…");
+        io.execute(()->{
+            try{
+                List<EmulatorLibraryScanner.ImportedGame> found=EmulatorLibraryScanner.scan(this,uri,emulator);
+                int count=db.syncEmulatorGames(emulator,found);
+                runOnUiThread(()->{
+                    if(count>0)toast(count+" jogos de "+emulator.platform+" encontrados");
+                    else toast("Nenhuma ROM compatível encontrada nessa pasta");
+                    refreshAsync(false);
+                });
+            }catch(Exception e){
+                runOnUiThread(()->{
+                    db.setSetting("emulator.tree_uri."+emulator.packageName,"");
+                    toast("Não consegui ler a biblioteca: "+e.getMessage());
+                });
+            }
+        });
+    }
+
+    private void importEdenPlaytime(String packageName){
+        if(!Shizuku.pingBinder())return;
+        try{
+            Map<String,Long> times=EdenPlaytimeScanner.read(packageName);
+            Map<String,String> links=db.listEdenProgramIds(packageName);
+            for(Map.Entry<String,String> link:links.entrySet()){
+                Long sec=times.get(link.getValue());
+                if(sec!=null)db.replaceImportedPlaytime(link.getKey(),"eden",sec);
+            }
+        }catch(Exception ignored){}
     }
 
     private void syncGameNativeWithShizuku(boolean notify){
@@ -752,6 +808,36 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void updateArtworkInfo(){
+        boolean has=!SecretStore.get(this,"steamgriddb.api_key").isEmpty();
+        artworkInfo.setText(has
+            ?"Libretro + SteamGridDB configurados. Capas modernas e retrô serão buscadas e armazenadas em cache."
+            :"Libretro será usado automaticamente. Configure SteamGridDB para capas de Switch e outros sistemas modernos.");
+    }
+
+    private void showArtworkConfig(){
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);wrap.setOrientation(LinearLayout.VERTICAL);wrap.setPadding(pad,8,pad,0);
+        boolean has=!SecretStore.get(this,"steamgriddb.api_key").isEmpty();
+        EditText key=new EditText(this);key.setSingleLine(true);
+        key.setHint(has?"API Key (vazio = manter a atual)":"SteamGridDB API Key");
+        key.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        wrap.addView(key,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+        TextView link=new TextView(this);link.setText("Obter API Key no SteamGridDB ↗");link.setTextColor(getColor(R.color.ludex_accent));link.setTextSize(14);link.setPadding(0,pad/2,0,pad/2);
+        link.setOnClickListener(v->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.steamgriddb.com/profile/preferences/api")));}catch(Exception e){toast("Não foi possível abrir o SteamGridDB");}});
+        wrap.addView(link,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Capas de jogos emulados")
+            .setMessage("Sistemas retrô usam Libretro sem chave. SteamGridDB serve como fallback, inclusive para Nintendo Switch.")
+            .setView(wrap).setNegativeButton("Cancelar",null)
+            .setNeutralButton("Remover chave",(d,w)->{SecretStore.remove(this,"steamgriddb.api_key");updateArtworkInfo();})
+            .setPositiveButton("Salvar",(d,w)->{
+                String value=key.getText()==null?"":key.getText().toString().trim();
+                try{if(!value.isEmpty())SecretStore.put(this,"steamgriddb.api_key",value);updateArtworkInfo();gameAdapter.notifyDataSetChanged();}
+                catch(Exception e){toast("Não foi possível proteger a chave: "+e.getMessage());}
+            }).show();
+    }
+
     private void checkForAndroidUpdate(){
         View button=findViewById(R.id.mobile_update);button.setEnabled(false);toast("Verificando atualização…");
         io.execute(()->{
@@ -824,27 +910,46 @@ public final class MainActivity extends AppCompatActivity {
 
     private void bindGameArtwork(LudexDb.GameRow g,ImageView view){
         view.setTag(g.id);
-        String iconPkg=g.packageName!=null?g.packageName:(g.gameNative?GameNativeScanner.PACKAGE:(g.eden?(db.getEdenLaunch(g.id)==null?null:db.getEdenLaunch(g.id).packageName):null));
+        String iconPkg=g.packageName;
+        if(iconPkg==null&&g.gameNative)iconPkg=GameNativeScanner.PACKAGE;
+        if(iconPkg==null&&g.eden){
+            LudexDb.EdenLaunch e=db.getEdenLaunch(g.id);if(e!=null)iconPkg=e.packageName;
+        }
+        if(iconPkg==null&&g.emulated){
+            LudexDb.EmulatorLaunch e=db.getEmulatorLaunch(g.id);if(e!=null)iconPkg=e.packageName;
+        }
         Drawable fallback=iconPkg==null?null:appIcon(iconPkg);
-        view.setImageDrawable(fallback);
-        view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
-
-        if(!g.gameNative)return;
-        LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
-        if(launch==null)return;
+        view.setImageDrawable(fallback);view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
 
         final String expectedTag=g.id;
-        io.execute(()->{
-            android.graphics.Bitmap bmp=GameArtworkLoader.load(this,launch.provider,launch.externalId);
-            if(bmp==null)return;
-            runOnUiThread(()->{
-                Object tag=view.getTag();
-                if(tag!=null&&expectedTag.equals(tag.toString())){
-                    view.setImageBitmap(bmp);
-                    view.setVisibility(View.VISIBLE);
-                }
+        if(g.gameNative){
+            LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
+            if(launch==null)return;
+            io.execute(()->{
+                android.graphics.Bitmap bmp=GameArtworkLoader.load(this,launch.provider,launch.externalId);
+                if(bmp==null)return;
+                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
             });
-        });
+            return;
+        }
+        if(g.emulated){
+            String pkg=null;
+            if(g.eden){LudexDb.EdenLaunch e=db.getEdenLaunch(g.id);if(e!=null)pkg=e.packageName;}
+            else {LudexDb.EmulatorLaunch e=db.getEmulatorLaunch(g.id);if(e!=null)pkg=e.packageName;}
+            EmulatorRegistry.Emulator em=EmulatorRegistry.get(pkg);
+            String libretro=em==null?null:em.libretroSystem;
+            String key=SecretStore.get(this,"steamgriddb.api_key");
+            io.execute(()->{
+                android.graphics.Bitmap bmp=EmulatedArtworkLoader.load(this,g.platform,libretro,g.title,key);
+                if(bmp==null)return;
+                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
+            });
+        }
+    }
+
+    private void applyArtwork(ImageView view,String expectedTag,android.graphics.Bitmap bmp){
+        Object tag=view.getTag();
+        if(tag!=null&&expectedTag.equals(tag.toString())){view.setImageBitmap(bmp);view.setVisibility(View.VISIBLE);}
     }
 
     Drawable appIcon(String pkg){
@@ -872,11 +977,13 @@ public final class MainActivity extends AppCompatActivity {
         private final ArrayList<LudexDb.GameRow> all=new ArrayList<>(),shown=new ArrayList<>();
         private final GameClick click,launch;
         GameAdapter(GameClick click,GameClick launch){this.click=click;this.launch=launch;}
-        void setAll(List<LudexDb.GameRow> x){all.clear();all.addAll(x);filter("",tab==Tab.ANDROID);}
-        void filter(String query,boolean androidOnly){
+        void setAll(List<LudexDb.GameRow> x){all.clear();all.addAll(x);filter("",tab);}
+        void filter(String query,Tab mode){
             shown.clear();String q=query==null?"":query.trim().toLowerCase(Locale.ROOT);
             for(LudexDb.GameRow g:all){
-                if(androidOnly&&!"android".equals(g.source))continue;
+                if(mode==Tab.ANDROID&&!"android".equals(g.source))continue;
+                if(mode==Tab.EMULATED&&!g.emulated)continue;
+                if(mode==Tab.LIBRARY&&g.emulated)continue;
                 if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q))continue;
                 shown.add(g);
             }
@@ -888,7 +995,7 @@ public final class MainActivity extends AppCompatActivity {
             h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.gameNative?" · GameNative":(g.eden?" · Eden":(g.installed?" · instalado":""))));
             h.time.setText(format(g.seconds));h.status.setText(g.favorite?"★ "+g.status:g.status);
             bindGameArtwork(g,h.icon);
-            h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative||g.eden)?View.VISIBLE:View.GONE);
+            h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative||g.emulated)?View.VISIBLE:View.GONE);
             h.itemView.setOnClickListener(v->click.click(g));h.play.setOnClickListener(v->launch.click(g));
         }
         public int getItemCount(){return shown.size();}
@@ -909,15 +1016,19 @@ public final class MainActivity extends AppCompatActivity {
             EmulatorRegistry.Emulator e=items.get(pos);
             boolean gameNative=GameNativeScanner.PACKAGE.equals(e.packageName);
             boolean eden=EdenShortcutScanner.STANDARD_PACKAGE.equals(e.packageName)||EdenShortcutScanner.OPTIMIZED_PACKAGE.equals(e.packageName);
-            h.name.setText(e.name);h.pkg.setText(e.packageName);h.open.setOnClickListener(v->launch.click(e));
-            h.rom.setVisibility((gameNative||eden)?View.GONE:View.VISIBLE);h.rom.setOnClickListener(v->rom.click(e));
-            h.library.setVisibility((gameNative||eden)?View.VISIBLE:View.GONE);
+            h.name.setText(e.name);h.pkg.setText(e.platform+" · "+e.packageName);h.open.setOnClickListener(v->launch.click(e));
+            h.rom.setVisibility(gameNative?View.GONE:View.VISIBLE);h.rom.setOnClickListener(v->rom.click(e));
+            h.library.setVisibility((gameNative||!e.extensions.isEmpty())?View.VISIBLE:View.GONE);
             String savedTree=db.getSetting("gamenative.tree_uri","");
             boolean binder=shizukuBinderReady||Shizuku.pingBinder();
             if(eden){
                 String edenTree=db.getSetting("eden.tree_uri."+e.packageName,"");
                 h.library.setText(edenTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos");
-            }else h.library.setText(binder?"Importar atalhos do GameNative":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
+            }else if(gameNative)h.library.setText(binder?"Importar atalhos do GameNative":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
+            else{
+                String tree=db.getSetting("emulator.tree_uri."+e.packageName,"");
+                h.library.setText(tree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos");
+            }
             h.library.setOnClickListener(v->library.click(e));
         }
         public int getItemCount(){return items.size();}
