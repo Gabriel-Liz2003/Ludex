@@ -98,14 +98,14 @@ public final class LudexDb extends SQLiteOpenHelper {
         return count;
     }
 
-    public int syncEdenGames(List<EdenShortcutScanner.ShortcutGame> games){
+    public int syncEdenGames(List<EdenLibraryScanner.ImportedGame> games){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;
         try{
             db.delete("eden_games",null,null);
             ContentValues off=new ContentValues();off.put("installed",0);
             db.update("games",off,"source='eden'",null);
             long now=System.currentTimeMillis();
-            for(EdenShortcutScanner.ShortcutGame item:games){
+            for(EdenLibraryScanner.ImportedGame item:games){
                 String gameId=null;
                 try(Cursor cur=db.rawQuery("SELECT id FROM games WHERE source!='android' AND lower(trim(title))=lower(trim(?)) ORDER BY CASE WHEN source='eden' THEN 1 ELSE 0 END LIMIT 1",new String[]{item.title})){
                     if(cur.moveToFirst())gameId=cur.getString(0);
