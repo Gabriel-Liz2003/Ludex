@@ -7,7 +7,7 @@
         <intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent>
         <intent><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><data android:scheme="content"/></intent>
     </queries>
-    <application android:theme="@style/AppTheme" android:label="Ludex" android:allowBackup="true" android:supportsRtl="true">
+    <application android:theme="@style/AppTheme" android:label="Ludex" android:icon="@drawable/ludex_icon" android:roundIcon="@drawable/ludex_icon" android:allowBackup="true" android:supportsRtl="true">
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
