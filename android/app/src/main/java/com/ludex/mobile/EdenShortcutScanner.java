@@ -9,7 +9,7 @@ import rikka.shizuku.Shizuku;
 
 public final class EdenShortcutScanner {
     public static final String STANDARD_PACKAGE="dev.eden.eden_emulator";
-    public static final String OPTIMIZED_PACKAGE="com.miHoYo.Yuanshen";
+    public static final String OPTIMIZED_PACKAGE="dev.optimized.eden_emulator";
     public static final String ACTIVITY="org.yuzu.yuzu_emu.activities.EmulationActivity";
 
     public static final class ShortcutGame {
