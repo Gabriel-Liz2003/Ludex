@@ -93,6 +93,19 @@
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:text="Sincronizar horas Steam"/>
 
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp" android:text="Capas de jogos emulados"
+                    android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
+                <TextView android:id="@+id/artwork_info" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Libretro é usado sem chave quando possível. SteamGridDB pode cobrir sistemas modernos como Switch."
+                    android:textColor="@color/ludex_muted" android:textSize="13sp"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/artwork_config"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Configurar SteamGridDB"/>
+
                 <com.google.android.material.button.MaterialButton android:id="@+id/mobile_update"
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
