@@ -4,16 +4,18 @@ import android.content.Context;
 import android.net.Uri;
 import androidx.documentfile.provider.DocumentFile;
 import java.util.*;
+import java.util.regex.*;
 
 public final class EdenLibraryScanner {
     public static final class ImportedGame {
-        public final String packageName,title,uri;
-        ImportedGame(String packageName,String title,String uri){
-            this.packageName=packageName;this.title=title;this.uri=uri;
+        public final String packageName,title,uri,programId;
+        ImportedGame(String packageName,String title,String uri,String programId){
+            this.packageName=packageName;this.title=title;this.uri=uri;this.programId=programId;
         }
     }
 
     private static final Set<String> EXT=new HashSet<>(Arrays.asList("xci","nsp","nca","nro"));
+    private static final Pattern TITLE_ID=Pattern.compile("(?i)(?:\\[|\\b)([0-9a-f]{16})(?:\\]|\\b)");
 
     private EdenLibraryScanner(){}
 
@@ -35,9 +37,19 @@ public final class EdenLibraryScanner {
             if(dot<=0||dot==name.length()-1)continue;
             String ext=name.substring(dot+1).toLowerCase(Locale.ROOT);
             if(!EXT.contains(ext))continue;
-            String title=cleanTitle(name.substring(0,dot));
-            out.add(new ImportedGame(packageName,title,f.getUri().toString()));
+            String stem=name.substring(0,dot);
+            String programId=extractProgramId(stem);
+            String title=cleanTitle(stem);
+            out.add(new ImportedGame(packageName,title,f.getUri().toString(),programId));
         }
+    }
+
+    static String extractProgramId(String raw){
+        Matcher m=TITLE_ID.matcher(raw);
+        if(!m.find())return "";
+        try{
+            return Long.toUnsignedString(Long.parseUnsignedLong(m.group(1),16));
+        }catch(Exception e){return "";}
     }
 
     static String cleanTitle(String raw){

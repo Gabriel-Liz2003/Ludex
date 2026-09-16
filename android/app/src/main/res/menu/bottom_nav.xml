@@ -1,6 +1,7 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
  <item android:id="@+id/nav_library" android:icon="@drawable/ic_library" android:title="Biblioteca"/>
  <item android:id="@+id/nav_android" android:icon="@drawable/ic_android_game" android:title="Android"/>
+ <item android:id="@+id/nav_emulated" android:icon="@drawable/ic_emulator" android:title="Emulados"/>
  <item android:id="@+id/nav_emulators" android:icon="@drawable/ic_emulator" android:title="Emuladores"/>
  <item android:id="@+id/nav_sync" android:icon="@drawable/ic_sync" android:title="Sync"/>
 </menu>
