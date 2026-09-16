@@ -14,6 +14,10 @@ public final class LudexDb extends SQLiteOpenHelper {
         public long seconds,updatedAt;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
+    public static final class GameNativeLaunch {
+        public final String provider,externalId;
+        GameNativeLaunch(String provider,String externalId){this.provider=provider;this.externalId=externalId;}
+    }
 
     public LudexDb(Context c){super(c,"ludex-mobile.db",null,6);}
     @Override public void onCreate(SQLiteDatabase db){
@@ -81,6 +85,13 @@ public final class LudexDb extends SQLiteOpenHelper {
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         return count;
+    }
+
+    public GameNativeLaunch getGameNativeLaunch(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT provider,external_id FROM gamenative_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            if(c.moveToFirst())return new GameNativeLaunch(c.getString(0),c.getString(1));
+        }
+        return null;
     }
 
     public void setImportedPlaytime(String game,String provider,long seconds){
