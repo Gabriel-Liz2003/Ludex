@@ -9,8 +9,8 @@ android {
         applicationId 'com.ludex.mobile'
         minSdk 26
         targetSdk 36
-        versionCode 23
-        versionName '0.9.17'
+        versionCode 24
+        versionName '0.9.18'
     }
     signingConfigs {
         ludexRelease {
