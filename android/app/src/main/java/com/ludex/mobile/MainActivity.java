@@ -183,9 +183,12 @@ public final class MainActivity extends AppCompatActivity {
         super.onResume();
         if(activeEmulatedGameId!=null&&activeEmulatedStartedAt>0){
             long end=System.currentTimeMillis();
-            db.recordSession(activeEmulatedGameId,activeEmulatorPackage,activeEmulatedStartedAt,end,"emulator");
+            String finishedPackage=activeEmulatorPackage;
+            db.recordSession(activeEmulatedGameId,finishedPackage,activeEmulatedStartedAt,end,"emulator");
             activeEmulatedGameId=null;activeEmulatorPackage=null;activeEmulatedStartedAt=0;
-            refreshAsync(false);
+            if(EdenShortcutScanner.STANDARD_PACKAGE.equals(finishedPackage)||EdenShortcutScanner.OPTIMIZED_PACKAGE.equals(finishedPackage)){
+                io.execute(()->{importEdenPlaytime(finishedPackage);runOnUiThread(()->refreshAsync(false));});
+            }else refreshAsync(false);
         }
         shizukuBinderReady=Shizuku.pingBinder();
         if(emulatorAdapter!=null)emulatorAdapter.notifyDataSetChanged();
@@ -400,7 +403,7 @@ public final class MainActivity extends AppCompatActivity {
                 (g.packageName!=null?"\nApp: "+g.packageName:""))
             .setNeutralButton(g.favorite?"Remover favorito":"Favoritar",(d,w)->{db.setFavorite(g.id,!g.favorite);refreshAsync(false);})
             .setNegativeButton("Mais",(d,w)->showGameActions(g))
-            .setPositiveButton(g.installed&&(g.packageName!=null||g.gameNative||g.eden)?"JOGAR":"Fechar",(d,w)->{if(g.installed&&(g.packageName!=null||g.gameNative||g.eden))launchGame(g);})
+            .setPositiveButton(g.installed&&(g.packageName!=null||g.gameNative||g.emulated)?"JOGAR":"Fechar",(d,w)->{if(g.installed&&(g.packageName!=null||g.gameNative||g.emulated))launchGame(g);})
             .show();
     }
 
@@ -958,7 +961,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private String providerLabel(String source){
         if(source==null)return "Ludex";
-        switch(source){case "steam":return "Steam";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";default:return source;}
+        switch(source){case "steam":return "Steam";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";default:return source;}
     }
     static String format(long sec){long h=sec/3600,m=(sec%3600)/60;return h>0?h+"h "+m+"min":m+"min";}
     private void toast(String s){Snackbar.make(findViewById(R.id.root),s,Snackbar.LENGTH_LONG).show();}
