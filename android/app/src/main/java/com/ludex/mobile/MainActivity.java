@@ -385,6 +385,24 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void launchGame(LudexDb.GameRow g){
+        if(g.gameNative){
+            LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
+            if(launch!=null){
+                try{
+                    int appId=Integer.parseInt(launch.externalId);
+                    String source=launch.provider==null?"STEAM":launch.provider.toUpperCase(Locale.ROOT);
+                    Intent direct=new Intent("app.gamenative.LAUNCH_GAME")
+                        .setClassName(GameNativeScanner.PACKAGE,"app.gamenative.MainActivity")
+                        .putExtra("app_id",appId)
+                        .putExtra("game_source",source)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(direct);
+                    return;
+                }catch(Exception ex){
+                    toast("Falha no lançamento direto; abrindo GameNative");
+                }
+            }
+        }
         String pkg=g.packageName;
         if(pkg==null&&g.gameNative)pkg=GameNativeScanner.PACKAGE;
         if(pkg==null)return;
@@ -459,23 +477,33 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void syncGameNativeWithShizuku(boolean notify){
-        if(notify)toast("Lendo GameNative com Shizuku…");
+        if(notify)toast("Procurando atalhos do GameNative…");
         io.execute(()->{
             try{
+                List<GameNativeShortcutScanner.ShortcutGame> shortcuts=GameNativeShortcutScanner.scan();
+                if(!shortcuts.isEmpty()){
+                    ArrayList<GameNativeScanner.ImportedGame> found=new ArrayList<>();
+                    for(GameNativeShortcutScanner.ShortcutGame s:shortcuts)found.add(s.asImportedGame());
+                    int count=db.syncGameNativeGames(found);
+                    runOnUiThread(()->{
+                        toast(count+" atalhos do GameNative importados");
+                        refreshAsync(false);
+                    });
+                    return;
+                }
+
                 ShizukuGameNativeScanner.Result result=ShizukuGameNativeScanner.scan();
                 int count=db.syncGameNativeGames(result.games);
                 runOnUiThread(()->{
                     if(count>0){
-                        toast(count+" jogos do GameNative encontrados via Shizuku");
+                        toast(count+" jogos do GameNative encontrados no armazenamento");
                         refreshAsync(false);
-                    }else if(result.shizukuUid==0){
-                        toast("Shizuku está com root, mas nenhum jogo instalado foi encontrado");
                     }else{
-                        toast("Shizuku via ADB não acessa /data/user/0 do GameNative. Só consigo ler jogos movidos para Android/data; para a pasta privada é necessário Shizuku com root/Sui.");
+                        toast("Nenhum atalho do GameNative foi encontrado. Crie os atalhos dos jogos no GameNative e tente novamente.");
                     }
                 });
             }catch(Exception e){
-                runOnUiThread(()->toast("Falha no Shizuku: "+e.getMessage()));
+                runOnUiThread(()->toast("Falha ao ler atalhos do GameNative: "+e.getMessage()));
             }
         });
     }
@@ -643,7 +671,7 @@ public final class MainActivity extends AppCompatActivity {
             h.library.setVisibility(gameNative?View.VISIBLE:View.GONE);
             String savedTree=db.getSetting("gamenative.tree_uri","");
             boolean binder=shizukuBinderReady||Shizuku.pingBinder();
-            h.library.setText(binder?"Ler jogos com Shizuku":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
+            h.library.setText(binder?"Importar atalhos do GameNative":(savedTree.isEmpty()?"Conectar biblioteca":"Sincronizar jogos"));
             h.library.setOnClickListener(v->library.click(e));
         }
         public int getItemCount(){return items.size();}
