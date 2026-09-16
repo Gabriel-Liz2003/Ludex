@@ -28,7 +28,7 @@ public final class ShizukuGameNativeScanner {
         if(!Shizuku.pingBinder())throw new IOException("Shizuku não está ativo");
         int uid=Shizuku.getUid();
         LinkedHashMap<String,GameNativeScanner.ImportedGame> out=new LinkedHashMap<>();
-        boolean privateAccess=uid==0 && commandOk("test -r /data/user/0/app.gamenative");
+        boolean privateAccess=commandOk("test -r /data/user/0/app.gamenative");
         scanSteam(out);
         scanGeneric(out,"gog","*/GOG/games/common/*");
         scanGeneric(out,"epic","*/Epic/games/*");
@@ -38,11 +38,11 @@ public final class ShizukuGameNativeScanner {
 
     private static void scanSteam(Map<String,GameNativeScanner.ImportedGame> out)throws Exception{
         String roots=rootsForFind();
-        String manifests=run("find "+roots+" -type f -name 'appmanifest_*.acf' 2>/dev/null");
+        String manifests=runBestEffort("find "+roots+" -type f -name 'appmanifest_*.acf' 2>/dev/null");
         for(String raw:manifests.split("\\R")){
             String path=raw.trim();
             if(path.isEmpty())continue;
-            String content=run("cat "+q(path)+" 2>/dev/null");
+            String content=runBestEffort("cat "+q(path)+" 2>/dev/null");
             String appid=valueFor(content,"appid"), title=valueFor(content,"name"), installDir=valueFor(content,"installdir");
             if(appid==null||title==null||installDir==null)continue;
             int slash=path.lastIndexOf('/');
@@ -56,7 +56,7 @@ public final class ShizukuGameNativeScanner {
 
     private static void scanGeneric(Map<String,GameNativeScanner.ImportedGame> out,String provider,String pattern)throws Exception{
         String roots=rootsForFind();
-        String dirs=run("find "+roots+" -type d -path "+q(pattern)+" 2>/dev/null");
+        String dirs=runBestEffort("find "+roots+" -type d -path "+q(pattern)+" 2>/dev/null");
         for(String raw:dirs.split("\\R")){
             String path=raw.trim();
             if(path.isEmpty())continue;
@@ -78,10 +78,9 @@ public final class ShizukuGameNativeScanner {
         return r.exitCode==0;
     }
 
-    private static String run(String cmd)throws Exception{
+    private static String runBestEffort(String cmd)throws Exception{
         CommandResult r=exec(new String[]{"sh","-c",cmd});
-        if(r.exitCode!=0 && r.stdout.trim().isEmpty())throw new IOException(r.stderr.isBlank()?"Comando Shizuku falhou ("+r.exitCode+")":r.stderr.trim());
-        return r.stdout;
+        return r.stdout==null?"":r.stdout;
     }
 
     private static CommandResult exec(String[] cmd)throws Exception{
