@@ -64,7 +64,7 @@ public final class GameNativeShortcutScanner {
 
     private static String clean(String value){
         String x=value.trim();
-        if((x.startsWith(""")&&x.endsWith("""))||(x.startsWith("'")&&x.endsWith("'")))x=x.substring(1,x.length()-1);
+        if((x.startsWith("\"")&&x.endsWith("\""))||(x.startsWith("'")&&x.endsWith("'")))x=x.substring(1,x.length()-1);
         return x.replace("\\n"," ").trim();
     }
 
