@@ -75,6 +75,24 @@
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:text="Atualizar horas dos jogos Android"/>
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp" android:text="Steam"
+                    android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
+                <TextView android:id="@+id/steam_sync_info" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Configure sua conta Steam para importar o playtime dos jogos do GameNative pelo AppID."
+                    android:textColor="@color/ludex_muted" android:textSize="13sp"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/steam_config"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Configurar Steam"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/steam_sync"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Sincronizar horas Steam"/>
+
                 <com.google.android.material.button.MaterialButton android:id="@+id/mobile_update"
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
