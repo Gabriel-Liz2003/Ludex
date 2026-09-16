@@ -23,11 +23,11 @@ public final class LudexDb extends SQLiteOpenHelper {
         GameNativeSteamLink(String gameId,String appId){this.gameId=gameId;this.appId=appId;}
     }
     public static final class EdenLaunch {
-        public final String packageName,uri;
-        EdenLaunch(String packageName,String uri){this.packageName=packageName;this.uri=uri;}
+        public final String packageName,uri,programId;
+        EdenLaunch(String packageName,String uri,String programId){this.packageName=packageName;this.uri=uri;this.programId=programId;}
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,7);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,8);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -36,7 +36,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX idx_imported_playtime_game ON imported_playtime(game_id)");
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
         db.execSQL("CREATE TABLE gamenative_games(game_id TEXT PRIMARY KEY,provider TEXT NOT NULL,external_id TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
-        db.execSQL("CREATE TABLE eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,program_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
         if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");
@@ -47,6 +47,9 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
         if(oldV<6)db.execSQL("CREATE TABLE IF NOT EXISTS gamenative_games(game_id TEXT PRIMARY KEY,provider TEXT NOT NULL,external_id TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         if(oldV<7)db.execSQL("CREATE TABLE IF NOT EXISTS eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+        if(oldV<8){
+            try{db.execSQL("ALTER TABLE eden_games ADD COLUMN program_id TEXT NOT NULL DEFAULT ''");}catch(Exception ignored){}
+        }
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
@@ -115,7 +118,7 @@ public final class LudexDb extends SQLiteOpenHelper {
                     ContentValues g=new ContentValues();g.put("id",gameId);g.put("title",item.title);g.put("platform","Nintendo Switch");g.put("source","eden");g.put("installed",0);g.put("updated_at",now);
                     db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
                 }
-                ContentValues link=new ContentValues();link.put("game_id",gameId);link.put("package_name",item.packageName);link.put("launch_uri",item.uri);link.put("title",item.title);link.put("updated_at",now);
+                ContentValues link=new ContentValues();link.put("game_id",gameId);link.put("package_name",item.packageName);link.put("launch_uri",item.uri);link.put("title",item.title);link.put("program_id",item.programId);link.put("updated_at",now);
                 db.insertWithOnConflict("eden_games",null,link,SQLiteDatabase.CONFLICT_REPLACE);
                 count++;
             }
@@ -125,10 +128,29 @@ public final class LudexDb extends SQLiteOpenHelper {
     }
 
     public EdenLaunch getEdenLaunch(String gameId){
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT package_name,launch_uri FROM eden_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
-            if(c.moveToFirst())return new EdenLaunch(c.getString(0),c.getString(1));
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT package_name,launch_uri,program_id FROM eden_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            if(c.moveToFirst())return new EdenLaunch(c.getString(0),c.getString(1),c.getString(2));
         }
         return null;
+    }
+
+    public Map<String,String> listEdenProgramIds(String packageName){
+        LinkedHashMap<String,String> out=new LinkedHashMap<>();
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,program_id FROM eden_games WHERE package_name=? AND program_id!=''",new String[]{packageName})){
+            while(c.moveToNext())out.put(c.getString(0),c.getString(1));
+        }
+        return out;
+    }
+
+    public void recordSession(String gameId,String packageName,long startedAt,long endedAt,String provider){
+        if(gameId==null||startedAt<=0||endedAt<=startedAt)return;
+        long seconds=(endedAt-startedAt)/1000L;
+        if(seconds<5)return;
+        ContentValues v=new ContentValues();
+        v.put("id",UUID.randomUUID().toString());v.put("game_id",gameId);v.put("package_name",packageName);
+        v.put("started_at",startedAt);v.put("ended_at",endedAt);v.put("duration_seconds",seconds);
+        v.put("device","android");v.put("provider",provider==null?"emulator":provider);
+        getWritableDatabase().insertWithOnConflict("play_sessions",null,v,SQLiteDatabase.CONFLICT_IGNORE);
     }
 
     public GameNativeLaunch getGameNativeLaunch(String gameId){
