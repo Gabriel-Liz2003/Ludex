@@ -13,7 +13,7 @@ public final class EmulatorRegistry {
         KNOWN.put("org.dolphinemu.dolphinemu","Dolphin");KNOWN.put("org.ppsspp.ppsspp","PPSSPP");KNOWN.put("org.ppsspp.ppssppgold","PPSSPP Gold");
         KNOWN.put("com.github.stenzek.duckstation","DuckStation");KNOWN.put("xyz.aethersx2.android","AetherSX2 / NetherSX2");
         KNOWN.put("org.citra.citra_emu","Citra");KNOWN.put("org.citra.emu","Citra");KNOWN.put("org.yuzu.yuzu_emu","Yuzu");
-        KNOWN.put("dev.eden.eden_emulator","Eden");KNOWN.put("com.miHoYo.Yuanshen","Eden (Optimized)");
+        KNOWN.put("dev.eden.eden_emulator","Eden");KNOWN.put("dev.optimized.eden_emulator","Eden (Optimized)");
         KNOWN.put("org.vita3k.emulator","Vita3K");KNOWN.put("org.mupen64plusae.v3.fzurita","M64Plus FZ");
         KNOWN.put("me.magnum.melonds","melonDS");KNOWN.put("com.dsemu.drastic","DraStic");
     }
