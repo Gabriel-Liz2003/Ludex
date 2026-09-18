@@ -36,7 +36,7 @@ public final class MainActivity extends AppCompatActivity {
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo, steamSyncInfo, artworkInfo;
+    private TextView summary, syncInfo, steamSyncInfo, nintendoSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
@@ -211,6 +211,7 @@ public final class MainActivity extends AppCompatActivity {
         syncPanel=findViewById(R.id.sync_panel);
         syncInfo=findViewById(R.id.sync_info);
         steamSyncInfo=findViewById(R.id.steam_sync_info);
+        nintendoSyncInfo=findViewById(R.id.nintendo_sync_info);
         artworkInfo=findViewById(R.id.artwork_info);
         emptyState=findViewById(R.id.empty_state);
         list.setLayoutManager(new LinearLayoutManager(this));
@@ -228,6 +229,8 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
         findViewById(R.id.steam_config).setOnClickListener(v->showSteamConfig());
         findViewById(R.id.steam_sync).setOnClickListener(v->syncSteamPlaytime(true));
+        findViewById(R.id.nintendo_connect).setOnClickListener(v->showNintendoConnect());
+        findViewById(R.id.nintendo_sync).setOnClickListener(v->syncNintendoPlaytime(true));
         findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
         findViewById(R.id.mobile_update).setOnClickListener(v->checkForAndroidUpdate());
 
@@ -283,6 +286,7 @@ public final class MainActivity extends AppCompatActivity {
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
                 "O Android não expõe o histórico oficial do Google Play; o Ludex usa Usage Access para medir o tempo em primeiro plano dos jogos neste aparelho e sincroniza esse tempo com o PC.");
             updateSteamSyncInfo();
+            updateNintendoSyncInfo();
             updateArtworkInfo();
             return;
         }
@@ -811,6 +815,137 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void updateNintendoSyncInfo(){
+        boolean connected=!SecretStore.get(this,"nintendo.session_token").isEmpty();
+        long last=db.getSettingLong("nintendo.last_sync_ms",0);
+        if(!connected){
+            boolean pending=!db.getSetting("nintendo.login.verifier","").isEmpty();
+            nintendoSyncInfo.setText(pending
+                ?"Login iniciado. Conclua o acesso da Nintendo e cole a URL de retorno."
+                :"Conta Nintendo não conectada. O Ludex pode importar seu histórico oficial de atividade e horas por jogo.");
+            return;
+        }
+        String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
+        nintendoSyncInfo.setText("Conta Nintendo conectada"+suffix);
+    }
+
+    private void showNintendoConnect(){
+        boolean connected=!SecretStore.get(this,"nintendo.session_token").isEmpty();
+        boolean pending=!db.getSetting("nintendo.login.verifier","").isEmpty();
+        MaterialAlertDialogBuilder b=new MaterialAlertDialogBuilder(this)
+            .setTitle("Conta Nintendo")
+            .setMessage(connected
+                ?"A sessão da Nintendo está salva de forma criptografada neste aparelho. O Ludex usa uma API não documentada do app Nintendo/My Nintendo para ler somente seu Play Activity."
+                :"O login abre no site oficial accounts.nintendo.com. O Ludex nunca recebe sua senha. Depois do login, copie a URL de retorno que começa com npf5c38e31cd085304b://auth# e cole no Ludex.");
+        if(connected){
+            b.setNegativeButton("Fechar",null)
+             .setNeutralButton("Desconectar",(d,w)->{
+                 SecretStore.remove(this,"nintendo.session_token");
+                 db.setSetting("nintendo.login.verifier","");
+                 db.setSetting("nintendo.login.state","");
+                 updateNintendoSyncInfo();
+                 toast("Conta Nintendo desconectada");
+             })
+             .setPositiveButton("Sincronizar",(d,w)->syncNintendoPlaytime(true));
+        }else{
+            b.setNegativeButton("Cancelar",null)
+             .setNeutralButton(pending?"Colar retorno":"Ajuda",(d,w)->{
+                 if(pending)showNintendoCallbackDialog();
+                 else new MaterialAlertDialogBuilder(this)
+                     .setTitle("Como conectar")
+                     .setMessage("1. Toque em Entrar com Nintendo.\n2. Faça login no site oficial.\n3. No botão final, copie o endereço do link se o navegador não conseguir abrir o app.\n4. Volte ao Ludex > Conta Nintendo > Colar retorno.\n\nA URL deve começar com npf5c38e31cd085304b://auth#.")
+                     .setPositiveButton("Entendi",null).show();
+             })
+             .setPositiveButton("Entrar com Nintendo",(d,w)->startNintendoLogin());
+        }
+        b.show();
+    }
+
+    private void startNintendoLogin(){
+        try{
+            NintendoPlayActivityClient.LoginRequest req=NintendoPlayActivityClient.newLoginRequest();
+            db.setSetting("nintendo.login.verifier",req.codeVerifier);
+            db.setSetting("nintendo.login.state",req.state);
+            updateNintendoSyncInfo();
+            startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(req.url)));
+            toast("Após concluir o login, copie a URL de retorno e volte ao Ludex");
+        }catch(Exception e){toast("Não foi possível iniciar o login Nintendo: "+e.getMessage());}
+    }
+
+    private void showNintendoCallbackDialog(){
+        EditText input=new EditText(this);
+        input.setSingleLine(false);
+        input.setMinLines(3);
+        input.setHint("npf5c38e31cd085304b://auth#session_token_code=...");
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        FrameLayout wrap=new FrameLayout(this);wrap.setPadding(pad,0,pad,0);wrap.addView(input);
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Concluir login Nintendo")
+            .setMessage("Cole a URL completa de retorno gerada após autorizar sua Conta Nintendo.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setNeutralButton("Abrir login novamente",(d,w)->startNintendoLogin())
+            .setPositiveButton("Conectar",(d,w)->{
+                String callback=input.getText()==null?"":input.getText().toString().trim();
+                if(callback.isEmpty()){toast("Cole a URL de retorno");return;}
+                finishNintendoLogin(callback);
+            }).show();
+    }
+
+    private void finishNintendoLogin(String callback){
+        String verifier=db.getSetting("nintendo.login.verifier","");
+        String expectedState=db.getSetting("nintendo.login.state","");
+        if(verifier.isEmpty()){toast("Inicie o login Nintendo novamente");return;}
+        toast("Validando Conta Nintendo…");
+        io.execute(()->{
+            try{
+                NintendoPlayActivityClient.Callback parsed=NintendoPlayActivityClient.parseCallback(callback);
+                if(!expectedState.isEmpty()&&!expectedState.equals(parsed.state))throw new SecurityException("state do login não confere");
+                String session=NintendoPlayActivityClient.exchangeSessionToken(parsed.code,verifier);
+                SecretStore.put(this,"nintendo.session_token",session);
+                db.setSetting("nintendo.login.verifier","");
+                db.setSetting("nintendo.login.state","");
+                runOnUiThread(()->{
+                    updateNintendoSyncInfo();
+                    toast("Conta Nintendo conectada");
+                    syncNintendoPlaytime(true);
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha no login Nintendo: "+e.getMessage()));
+            }
+        });
+    }
+
+    private void syncNintendoPlaytime(boolean notify){
+        String session=SecretStore.get(this,"nintendo.session_token");
+        if(session.isEmpty()){
+            if(notify)showNintendoConnect();
+            return;
+        }
+        if(notify)toast("Sincronizando atividade da Nintendo…");
+        io.execute(()->{
+            try{
+                List<NintendoPlayActivityClient.Title> titles=NintendoPlayActivityClient.getPlayHistory(session,"pt-BR");
+                int count=db.syncNintendoPlayHistory(titles);
+                db.setSetting("nintendo.last_sync_ms",Long.toString(System.currentTimeMillis()));
+                runOnUiThread(()->{
+                    updateNintendoSyncInfo();
+                    if(notify)toast(count+" jogos da Conta Nintendo sincronizados");
+                    refreshAsync(false);
+                });
+            }catch(Exception e){
+                String msg=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                if(msg.contains("401")||msg.contains("403")||msg.contains("invalid_grant")){
+                    SecretStore.remove(this,"nintendo.session_token");
+                }
+                runOnUiThread(()->{
+                    updateNintendoSyncInfo();
+                    toast("Falha na Nintendo: "+msg);
+                });
+            }
+        });
+    }
+
     private void updateArtworkInfo(){
         boolean has=!SecretStore.get(this,"steamgriddb.api_key").isEmpty();
         artworkInfo.setText(has
@@ -925,6 +1060,17 @@ public final class MainActivity extends AppCompatActivity {
         view.setImageDrawable(fallback);view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
 
         final String expectedTag=g.id;
+        if("nintendo".equals(g.source)){
+            LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
+            if(n!=null&&!n.imageUrl.isBlank()){
+                io.execute(()->{
+                    android.graphics.Bitmap bmp=NintendoArtworkLoader.load(this,n.titleId,n.imageUrl);
+                    if(bmp==null)return;
+                    runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
+                });
+            }
+            return;
+        }
         if(g.gameNative){
             LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
             if(launch==null)return;
@@ -961,7 +1107,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private String providerLabel(String source){
         if(source==null)return "Ludex";
-        switch(source){case "steam":return "Steam";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";default:return source;}
+        switch(source){case "steam":return "Steam";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";default:return source;}
     }
     static String format(long sec){long h=sec/3600,m=(sec%3600)/60;return h>0?h+"h "+m+"min":m+"min";}
     private void toast(String s){Snackbar.make(findViewById(R.id.root),s,Snackbar.LENGTH_LONG).show();}
