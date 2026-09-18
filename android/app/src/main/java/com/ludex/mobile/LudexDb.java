@@ -30,8 +30,12 @@ public final class LudexDb extends SQLiteOpenHelper {
         public final String packageName,uri,platformId;
         EmulatorLaunch(String packageName,String uri,String platformId){this.packageName=packageName;this.uri=uri;this.platformId=platformId;}
     }
+    public static final class NintendoInfo {
+        public final String titleId,imageUrl,platform;
+        NintendoInfo(String titleId,String imageUrl,String platform){this.titleId=titleId;this.imageUrl=imageUrl;this.platform=platform;}
+    }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,9);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,10);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -42,6 +46,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE gamenative_games(game_id TEXT PRIMARY KEY,provider TEXT NOT NULL,external_id TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,program_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
         if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");
@@ -56,6 +61,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             try{db.execSQL("ALTER TABLE eden_games ADD COLUMN program_id TEXT NOT NULL DEFAULT ''");}catch(Exception ignored){}
         }
         if(oldV<9)db.execSQL("CREATE TABLE IF NOT EXISTS emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+        if(oldV<10)db.execSQL("CREATE TABLE IF NOT EXISTS nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
@@ -202,6 +208,41 @@ public final class LudexDb extends SQLiteOpenHelper {
             while(c.moveToNext())out.add(new GameNativeSteamLink(c.getString(0),c.getString(1)));
         }
         return out;
+    }
+
+    public int syncNintendoPlayHistory(List<NintendoPlayActivityClient.Title> titles){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;long now=System.currentTimeMillis();
+        try{
+            for(NintendoPlayActivityClient.Title item:titles){
+                String platform=item.platform==null||item.platform.isBlank()?"Nintendo Switch":item.platform;
+                String gameId="nintendo:"+item.titleId+":"+Integer.toHexString(platform.toLowerCase(Locale.ROOT).hashCode());
+                ContentValues g=new ContentValues();
+                g.put("id",gameId);g.put("title",item.titleName);g.put("platform",platform);g.put("source","nintendo");g.put("installed",0);g.put("updated_at",now);
+                db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+                ContentValues gu=new ContentValues();gu.put("title",item.titleName);gu.put("platform",platform);gu.put("source","nintendo");gu.put("updated_at",now);
+                db.update("games",gu,"id=?",new String[]{gameId});
+
+                ContentValues n=new ContentValues();
+                n.put("game_id",gameId);n.put("title_id",item.titleId);n.put("image_url",item.imageUrl==null?"":item.imageUrl);
+                n.put("platform",platform);n.put("first_played_at",item.firstPlayedAt==null?"":item.firstPlayedAt);
+                n.put("last_played_at",item.lastPlayedAt==null?"":item.lastPlayedAt);n.put("updated_at",now);
+                db.insertWithOnConflict("nintendo_games",null,n,SQLiteDatabase.CONFLICT_REPLACE);
+
+                ContentValues p=new ContentValues();p.put("game_id",gameId);p.put("provider","nintendo-account");
+                p.put("seconds",Math.max(0,item.totalPlayedMinutes)*60L);p.put("updated_at",now);
+                db.insertWithOnConflict("imported_playtime",null,p,SQLiteDatabase.CONFLICT_REPLACE);
+                count++;
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return count;
+    }
+
+    public NintendoInfo getNintendoInfo(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT title_id,image_url,platform FROM nintendo_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            if(c.moveToFirst())return new NintendoInfo(c.getString(0),c.getString(1),c.getString(2));
+        }
+        return null;
     }
 
     public void setImportedPlaytime(String game,String provider,long seconds){
