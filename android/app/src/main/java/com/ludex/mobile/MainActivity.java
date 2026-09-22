@@ -415,10 +415,27 @@ public final class MainActivity extends AppCompatActivity {
         ArrayList<String> actions=new ArrayList<>();
         actions.add("Alterar status");
         if("android".equals(g.source)&&g.packageName!=null)actions.add("Ajustar horas totais");
+        actions.add("Excluir da lista");
         new MaterialAlertDialogBuilder(this).setTitle(g.title).setItems(actions.toArray(new String[0]),(d,which)->{
-            if(which==0)showStatusPicker(g);
-            else calibratePlaytime(g);
+            String action=actions.get(which);
+            if("Alterar status".equals(action))showStatusPicker(g);
+            else if("Ajustar horas totais".equals(action))calibratePlaytime(g);
+            else if("Excluir da lista".equals(action))confirmHideGame(g);
         }).show();
+    }
+
+    private void confirmHideGame(LudexDb.GameRow g){
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Excluir "+g.title+" da lista?")
+            .setMessage("Isso só remove o jogo da biblioteca do Ludex. O app, ROM, save, horas e arquivos originais não serão apagados. Se ele for encontrado novamente em uma sincronização, continuará oculto.")
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Excluir",(d,w)->{
+                db.hideGame(g.id);
+                refreshAsync(false);
+                Snackbar.make(findViewById(R.id.root),g.title+" removido da lista",Snackbar.LENGTH_LONG)
+                    .setAction("DESFAZER",v->{db.unhideGame(g.id);refreshAsync(false);})
+                    .show();
+            }).show();
     }
 
     private void showStatusPicker(LudexDb.GameRow g){

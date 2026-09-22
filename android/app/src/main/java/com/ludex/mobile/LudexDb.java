@@ -35,7 +35,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         NintendoInfo(String titleId,String imageUrl,String platform){this.titleId=titleId;this.imageUrl=imageUrl;this.platform=platform;}
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,10);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,11);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -47,6 +47,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,program_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
         if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");
@@ -62,6 +63,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
         if(oldV<9)db.execSQL("CREATE TABLE IF NOT EXISTS emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         if(oldV<10)db.execSQL("CREATE TABLE IF NOT EXISTS nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
+        if(oldV<11)db.execSQL("CREATE TABLE IF NOT EXISTS hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
@@ -83,7 +85,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id) "+
-            "FROM games g ORDER BY g.title COLLATE NOCASE";
+            "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);g.gameNative=c.getInt(10)!=0;g.eden=c.getInt(11)!=0;g.emulated=g.eden||c.getInt(12)!=0;out.add(g);}}
         return out;
     }
@@ -254,6 +256,17 @@ public final class LudexDb extends SQLiteOpenHelper {
         ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",Math.max(0,seconds));v.put("updated_at",System.currentTimeMillis());
         getWritableDatabase().insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_REPLACE);
     }
+    public void hideGame(String id){
+        if(id==null||id.isBlank())return;
+        ContentValues v=new ContentValues();v.put("game_id",id);v.put("hidden_at",System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict("hidden_games",null,v,SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    public void unhideGame(String id){
+        if(id==null||id.isBlank())return;
+        getWritableDatabase().delete("hidden_games","game_id=?",new String[]{id});
+    }
+
     public void setFavorite(String id,boolean value){ContentValues v=new ContentValues();v.put("favorite",value?1:0);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",v,"id=?",new String[]{id});}
     public void setStatus(String id,String status){ContentValues v=new ContentValues();v.put("status",status);v.put("updated_at",System.currentTimeMillis());getWritableDatabase().update("games",v,"id=?",new String[]{id});}
     public void setSetting(String key,String value){ContentValues v=new ContentValues();v.put("key",key);v.put("value",value);getWritableDatabase().insertWithOnConflict("settings",null,v,SQLiteDatabase.CONFLICT_REPLACE);}
