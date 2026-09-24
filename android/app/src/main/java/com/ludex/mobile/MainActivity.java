@@ -183,11 +183,19 @@ public final class MainActivity extends AppCompatActivity {
         super.onResume();
         if(activeEmulatedGameId!=null&&activeEmulatedStartedAt>0){
             long end=System.currentTimeMillis();
+            String finishedGameId=activeEmulatedGameId;
             String finishedPackage=activeEmulatorPackage;
-            db.recordSession(activeEmulatedGameId,finishedPackage,activeEmulatedStartedAt,end,"emulator");
+            db.recordSession(finishedGameId,finishedPackage,activeEmulatedStartedAt,end,"emulator");
             activeEmulatedGameId=null;activeEmulatorPackage=null;activeEmulatedStartedAt=0;
             if(EdenShortcutScanner.STANDARD_PACKAGE.equals(finishedPackage)||EdenShortcutScanner.OPTIMIZED_PACKAGE.equals(finishedPackage)){
-                io.execute(()->{importEdenPlaytime(finishedPackage);runOnUiThread(()->refreshAsync(false));});
+                io.execute(()->{
+                    try{
+                        String programId=EdenPlaytimeScanner.readLatestProgramId();
+                        if(!programId.isBlank())db.setEdenProgramId(finishedGameId,programId);
+                    }catch(Exception ignored){}
+                    importEdenPlaytime(finishedPackage);
+                    runOnUiThread(()->refreshAsync(false));
+                });
             }else refreshAsync(false);
         }
         shizukuBinderReady=Shizuku.pingBinder();
