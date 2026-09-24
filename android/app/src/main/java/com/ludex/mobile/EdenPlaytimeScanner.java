@@ -28,6 +28,16 @@ public final class EdenPlaytimeScanner {
         return Collections.emptyMap();
     }
 
+    public static String readLatestProgramId() throws Exception {
+        if(!Shizuku.pingBinder())return "";
+        byte[] raw=runBinary(new String[]{"sh","-c","logcat -d -v brief -t 2500 2>/dev/null | grep -i 'Reloading disk shader cache for' | tail -n 1"});
+        String line=new String(raw).trim();
+        java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?i)Reloading disk shader cache for\\s+([0-9a-f]{16})").matcher(line);
+        if(!m.find())return "";
+        try{return Long.toUnsignedString(Long.parseUnsignedLong(m.group(1),16));}
+        catch(Exception e){return "";}
+    }
+
     static Map<String,Long> parse(byte[] data){
         LinkedHashMap<String,Long> out=new LinkedHashMap<>();
         ByteBuffer b=ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
