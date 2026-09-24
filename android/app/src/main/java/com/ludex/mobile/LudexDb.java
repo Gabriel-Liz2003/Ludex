@@ -149,6 +149,12 @@ public final class LudexDb extends SQLiteOpenHelper {
         return null;
     }
 
+    public void setEdenProgramId(String gameId,String programId){
+        if(gameId==null||programId==null||programId.isBlank())return;
+        ContentValues v=new ContentValues();v.put("program_id",programId);v.put("updated_at",System.currentTimeMillis());
+        getWritableDatabase().update("eden_games",v,"game_id=?",new String[]{gameId});
+    }
+
     public Map<String,String> listEdenProgramIds(String packageName){
         LinkedHashMap<String,String> out=new LinkedHashMap<>();
         try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,program_id FROM eden_games WHERE package_name=? AND program_id!=''",new String[]{packageName})){
