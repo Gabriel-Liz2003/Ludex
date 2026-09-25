@@ -399,7 +399,9 @@ public final class MainActivity extends AppCompatActivity {
         boolean sync=tab==Tab.SYNC;
         syncPanel.setVisibility(sync?View.VISIBLE:View.GONE);
         list.setVisibility(sync?View.GONE:View.VISIBLE);
-        search.setVisibility((tab==Tab.LIBRARY||tab==Tab.ANDROID||tab==Tab.EMULATED)?View.VISIBLE:View.GONE);
+        boolean gamesTab=tab==Tab.LIBRARY||tab==Tab.ANDROID||tab==Tab.EMULATED;
+        search.setVisibility(gamesTab?View.VISIBLE:View.GONE);
+        findViewById(R.id.sort_playtime).setVisibility(gamesTab?View.VISIBLE:View.GONE);
         emptyState.setVisibility(View.GONE);
         if(sync){
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
