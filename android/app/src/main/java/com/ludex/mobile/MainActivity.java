@@ -48,6 +48,7 @@ public final class MainActivity extends AppCompatActivity {
     private boolean pendingGameNativeShizuku;
     private boolean pendingEdenShizuku;
     private boolean shizukuBinderReady;
+    private boolean sortByPlaytime;
     private static final int SHIZUKU_GAMENATIVE_REQUEST=4201;
     private static final int SHIZUKU_EDEN_REQUEST=4202;
 
@@ -230,7 +231,15 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void setupUi(){
-        findViewById(R.id.refresh).setOnClickListener(v->refreshAsync(true));
+        sortByPlaytime="playtime".equals(db.getSetting("library.sort","title"));
+        updateSortButton();
+        findViewById(R.id.refresh).setOnClickListener(v->refreshAllPlaytimeAsync());
+        findViewById(R.id.sort_playtime).setOnClickListener(v->{
+            sortByPlaytime=!sortByPlaytime;
+            db.setSetting("library.sort",sortByPlaytime?"playtime":"title");
+            updateSortButton();
+            renderCurrent();
+        });
         findViewById(R.id.usage_access).setOnClickListener(v->openUsageAccess());
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
@@ -253,6 +262,108 @@ public final class MainActivity extends AppCompatActivity {
             else tab=Tab.SYNC;
             renderCurrent();
             return true;
+        });
+    }
+
+    private void updateSortButton(){
+        Button sort=findViewById(R.id.sort_playtime);
+        sort.setText(sortByPlaytime?"Horas ↓":"A–Z");
+    }
+
+    private void refreshAllPlaytimeAsync(){
+        View refresh=findViewById(R.id.refresh);
+        refresh.setEnabled(false);
+        toast("Atualizando biblioteca e horas…");
+        io.execute(()->{
+            ArrayList<String> updated=new ArrayList<>();
+            ArrayList<String> failed=new ArrayList<>();
+            try{
+                scanInstalledGames();
+
+                if(hasUsageAccess()){
+                    try{
+                        importUsage();
+                        updated.add("Android");
+                    }catch(Exception e){failed.add("Android");}
+                }
+
+                boolean gameNativeScanned=false;
+                if(Shizuku.pingBinder()){
+                    try{
+                        if(Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED){
+                            List<GameNativeShortcutScanner.ShortcutGame> shortcuts=GameNativeShortcutScanner.scan();
+                            if(!shortcuts.isEmpty()){
+                                ArrayList<GameNativeScanner.ImportedGame> found=new ArrayList<>();
+                                for(GameNativeShortcutScanner.ShortcutGame s:shortcuts)found.add(s.asImportedGame());
+                                db.syncGameNativeGames(found);
+                                gameNativeScanned=true;
+                            }
+                        }
+                    }catch(Exception ignored){}
+                }
+                if(!gameNativeScanned){
+                    String gameNativeUri=db.getSetting("gamenative.tree_uri","");
+                    if(!gameNativeUri.isEmpty()){
+                        try{
+                            List<GameNativeScanner.ImportedGame> found=GameNativeScanner.scan(this,Uri.parse(gameNativeUri));
+                            db.syncGameNativeGames(found);
+                        }catch(Exception ignored){}
+                    }
+                }
+
+                String steamId=db.getSetting("steam.id64","");
+                String steamKey=SecretStore.get(this,"steam.api_key");
+                if(!steamId.isEmpty()&&!steamKey.isEmpty()){
+                    try{
+                        syncSteamPlaytimeNow(steamId,steamKey);
+                        updated.add("Steam");
+                    }catch(Exception e){failed.add("Steam");}
+                }
+
+                if(Shizuku.pingBinder()){
+                    int edenMatched=0;
+                    edenMatched+=importEdenPlaytime(EdenShortcutScanner.STANDARD_PACKAGE);
+                    edenMatched+=importEdenPlaytime(EdenShortcutScanner.OPTIMIZED_PACKAGE);
+                    if(edenMatched>0)updated.add("Eden");
+                }
+
+                String nintendoSession=SecretStore.get(this,"nintendo.session_token");
+                if(!nintendoSession.isEmpty()){
+                    try{
+                        syncNintendoPlaytimeNow(nintendoSession);
+                        updated.add("Nintendo");
+                    }catch(Exception e){
+                        String msg=e.getMessage()==null?"":e.getMessage();
+                        if(msg.contains("401")||msg.contains("403")||msg.contains("invalid_grant")){
+                            SecretStore.remove(this,"nintendo.session_token");
+                        }
+                        failed.add("Nintendo");
+                    }
+                }
+
+                final List<LudexDb.GameRow> games=db.listGames();
+                final List<EmulatorRegistry.Emulator> emulators=EmulatorRegistry.detect(this);
+                runOnUiThread(()->{
+                    gameAdapter.setAll(games);
+                    emulatorAdapter.setAll(emulators);
+                    updateSummary(games);
+                    updateSteamSyncInfo();
+                    updateNintendoSyncInfo();
+                    renderCurrent();
+                    refresh.setEnabled(true);
+
+                    String message=updated.isEmpty()
+                        ?"Biblioteca atualizada. Nenhuma fonte externa de horas configurada."
+                        :"Horas atualizadas: "+String.join(" · ",updated);
+                    if(!failed.isEmpty())message+=" · falhou: "+String.join(", ",failed);
+                    toast(message);
+                });
+            }catch(Exception e){
+                runOnUiThread(()->{
+                    refresh.setEnabled(true);
+                    toast("Atualização falhou: "+e.getMessage());
+                });
+            }
         });
     }
 
@@ -650,16 +761,21 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void importEdenPlaytime(String packageName){
-        if(!Shizuku.pingBinder())return;
+    private int importEdenPlaytime(String packageName){
+        if(!Shizuku.pingBinder())return 0;
         try{
             Map<String,Long> times=EdenPlaytimeScanner.read(packageName);
             Map<String,String> links=db.listEdenProgramIds(packageName);
+            int matched=0;
             for(Map.Entry<String,String> link:links.entrySet()){
                 Long sec=times.get(link.getValue());
-                if(sec!=null)db.replaceImportedPlaytime(link.getKey(),"eden",sec);
+                if(sec!=null){
+                    db.replaceImportedPlaytime(link.getKey(),"eden",sec);
+                    matched++;
+                }
             }
-        }catch(Exception ignored){}
+            return matched;
+        }catch(Exception ignored){return 0;}
     }
 
     private void syncGameNativeWithShizuku(boolean notify){
@@ -804,6 +920,25 @@ public final class MainActivity extends AppCompatActivity {
             }).show();
     }
 
+    private static final class SteamSyncResult{
+        final int matched,total;
+        SteamSyncResult(int matched,int total){this.matched=matched;this.total=total;}
+    }
+
+    private SteamSyncResult syncSteamPlaytimeNow(String steamId,String key) throws Exception {
+        Map<String,Long> owned=SteamPlaytimeClient.getOwnedPlaytime(key,steamId);
+        List<LudexDb.GameNativeSteamLink> links=db.listGameNativeSteamLinks();
+        int matched=0;
+        for(LudexDb.GameNativeSteamLink link:links){
+            Long sec=owned.get(link.appId);
+            if(sec==null)continue;
+            db.replaceImportedPlaytime(link.gameId,"steam",sec);
+            matched++;
+        }
+        db.setSetting("steam.last_sync_ms",Long.toString(System.currentTimeMillis()));
+        return new SteamSyncResult(matched,owned.size());
+    }
+
     private void syncSteamPlaytime(boolean notify){
         String steamId=db.getSetting("steam.id64","");
         String key=SecretStore.get(this,"steam.api_key");
@@ -814,23 +949,12 @@ public final class MainActivity extends AppCompatActivity {
         if(notify)toast("Sincronizando horas da Steam…");
         io.execute(()->{
             try{
-                Map<String,Long> owned=SteamPlaytimeClient.getOwnedPlaytime(key,steamId);
-                List<LudexDb.GameNativeSteamLink> links=db.listGameNativeSteamLinks();
-                int matched=0;
-                for(LudexDb.GameNativeSteamLink link:links){
-                    Long sec=owned.get(link.appId);
-                    if(sec==null)continue;
-                    db.replaceImportedPlaytime(link.gameId,"steam",sec);
-                    matched++;
-                }
-                db.setSetting("steam.last_sync_ms",Long.toString(System.currentTimeMillis()));
-                final int count=matched;
-                final int total=owned.size();
+                SteamSyncResult result=syncSteamPlaytimeNow(steamId,key);
                 runOnUiThread(()->{
                     updateSteamSyncInfo();
                     if(notify){
-                        if(total==0)toast("A Steam não retornou jogos. Confira SteamID64 e privacidade da conta.");
-                        else toast(count+" jogos do GameNative receberam playtime da Steam");
+                        if(result.total==0)toast("A Steam não retornou jogos. Confira SteamID64 e privacidade da conta.");
+                        else toast(result.matched+" jogos do GameNative receberam playtime da Steam");
                     }
                     refreshAsync(false);
                 });
@@ -941,6 +1065,13 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private int syncNintendoPlaytimeNow(String session) throws Exception {
+        List<NintendoPlayActivityClient.Title> titles=NintendoPlayActivityClient.getPlayHistory(session,"pt-BR");
+        int count=db.syncNintendoPlayHistory(titles);
+        db.setSetting("nintendo.last_sync_ms",Long.toString(System.currentTimeMillis()));
+        return count;
+    }
+
     private void syncNintendoPlaytime(boolean notify){
         String session=SecretStore.get(this,"nintendo.session_token");
         if(session.isEmpty()){
@@ -950,9 +1081,7 @@ public final class MainActivity extends AppCompatActivity {
         if(notify)toast("Sincronizando atividade da Nintendo…");
         io.execute(()->{
             try{
-                List<NintendoPlayActivityClient.Title> titles=NintendoPlayActivityClient.getPlayHistory(session,"pt-BR");
-                int count=db.syncNintendoPlayHistory(titles);
-                db.setSetting("nintendo.last_sync_ms",Long.toString(System.currentTimeMillis()));
+                int count=syncNintendoPlaytimeNow(session);
                 runOnUiThread(()->{
                     updateNintendoSyncInfo();
                     if(notify)toast(count+" jogos da Conta Nintendo sincronizados");
@@ -1160,6 +1289,12 @@ public final class MainActivity extends AppCompatActivity {
                 if(mode==Tab.LIBRARY&&g.emulated)continue;
                 if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q))continue;
                 shown.add(g);
+            }
+            if(sortByPlaytime){
+                shown.sort(Comparator.comparingLong((LudexDb.GameRow g)->g.seconds).reversed()
+                    .thenComparing(g->g.title,String.CASE_INSENSITIVE_ORDER));
+            }else{
+                shown.sort(Comparator.comparing(g->g.title,String.CASE_INSENSITIVE_ORDER));
             }
             notifyDataSetChanged();
         }
