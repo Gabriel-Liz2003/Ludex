@@ -81,7 +81,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         String sql="SELECT g.id,g.title,g.platform,g.source,g.package_name,"+
             "CASE WHEN g.installed=1 OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id) OR EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id) THEN 1 ELSE 0 END,"+
             "g.favorite,g.status,g.updated_at,"+
-            "MAX(COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id),0),COALESCE((SELECT SUM(seconds) FROM imported_playtime p WHERE p.game_id=g.id),0)) total,"+
+            "MAX(COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id),0),COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id),0)) total,"+
             "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id) "+
@@ -223,12 +223,18 @@ public final class LudexDb extends SQLiteOpenHelper {
         try{
             for(NintendoPlayActivityClient.Title item:titles){
                 String platform=item.platform==null||item.platform.isBlank()?"Nintendo Switch":item.platform;
-                String gameId="nintendo:"+item.titleId+":"+Integer.toHexString(platform.toLowerCase(Locale.ROOT).hashCode());
-                ContentValues g=new ContentValues();
-                g.put("id",gameId);g.put("title",item.titleName);g.put("platform",platform);g.put("source","nintendo");g.put("installed",0);g.put("updated_at",now);
-                db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
-                ContentValues gu=new ContentValues();gu.put("title",item.titleName);gu.put("platform",platform);gu.put("source","nintendo");gu.put("updated_at",now);
-                db.update("games",gu,"id=?",new String[]{gameId});
+                String gameId=findNintendoTargetGame(db,item);
+
+                if(gameId==null){
+                    gameId="nintendo:"+item.titleId+":"+Integer.toHexString(platform.toLowerCase(Locale.ROOT).hashCode());
+                    ContentValues g=new ContentValues();
+                    g.put("id",gameId);g.put("title",item.titleName);g.put("platform",platform);g.put("source","nintendo");g.put("installed",0);g.put("updated_at",now);
+                    db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+                    ContentValues gu=new ContentValues();gu.put("title",item.titleName);gu.put("platform",platform);gu.put("source","nintendo");gu.put("updated_at",now);
+                    db.update("games",gu,"id=?",new String[]{gameId});
+                }
+
+                cleanupOldNintendoDuplicate(db,item.titleId,gameId);
 
                 ContentValues n=new ContentValues();
                 n.put("game_id",gameId);n.put("title_id",item.titleId);n.put("image_url",item.imageUrl==null?"":item.imageUrl);
@@ -244,6 +250,84 @@ public final class LudexDb extends SQLiteOpenHelper {
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         return count;
+    }
+
+    private String findNintendoTargetGame(SQLiteDatabase db,NintendoPlayActivityClient.Title item){
+        Set<String> idCandidates=nintendoIdCandidates(item.titleId);
+        if(!idCandidates.isEmpty()){
+            try(Cursor c=db.rawQuery("SELECT eg.game_id,eg.program_id FROM eden_games eg WHERE eg.program_id!=''",null)){
+                while(c.moveToNext()){
+                    String pid=c.getString(1);
+                    if(idCandidates.contains(pid))return c.getString(0);
+                    Set<String> edenIds=nintendoIdCandidates(pid);
+                    for(String x:edenIds)if(idCandidates.contains(x))return c.getString(0);
+                }
+            }
+        }
+
+        String wanted=normalizeGameTitle(item.titleName);
+        if(!wanted.isEmpty()){
+            try(Cursor c=db.rawQuery(
+                "SELECT g.id,g.title FROM games g WHERE EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id AND lower(em.platform_id) IN ('switch','nintendo-switch','nsw'))",
+                null)){
+                String fuzzy=null;
+                while(c.moveToNext()){
+                    String candidate=normalizeGameTitle(c.getString(1));
+                    if(candidate.equals(wanted))return c.getString(0);
+                    if(fuzzy==null && (candidate.contains(wanted)||wanted.contains(candidate)) && Math.min(candidate.length(),wanted.length())>=8)fuzzy=c.getString(0);
+                }
+                if(fuzzy!=null)return fuzzy;
+            }
+        }
+        return null;
+    }
+
+    private void cleanupOldNintendoDuplicate(SQLiteDatabase db,String titleId,String keepGameId){
+        ArrayList<String> stale=new ArrayList<>();
+        try(Cursor c=db.rawQuery("SELECT game_id FROM nintendo_games WHERE title_id=? AND game_id!=?",new String[]{titleId,keepGameId})){
+            while(c.moveToNext())stale.add(c.getString(0));
+        }
+        for(String old:stale){
+            db.delete("nintendo_games","game_id=?",new String[]{old});
+            db.delete("imported_playtime","game_id=? AND provider='nintendo-account'",new String[]{old});
+            db.delete("hidden_games","game_id=?",new String[]{old});
+            db.delete("games","id=? AND source='nintendo'",new String[]{old});
+        }
+    }
+
+    private static Set<String> nintendoIdCandidates(String raw){
+        LinkedHashSet<String> out=new LinkedHashSet<>();
+        if(raw==null)return out;
+        String x=raw.trim().toLowerCase(Locale.ROOT);
+        if(x.isEmpty())return out;
+        out.add(x);
+        try{
+            if(x.matches("[0-9a-f]{1,16}")){
+                long v=Long.parseUnsignedLong(x,16);
+                out.add(Long.toUnsignedString(v));
+                out.add(String.format(Locale.ROOT,"%016x",v));
+            }
+        }catch(Exception ignored){}
+        try{
+            if(x.matches("\\d{1,20}")){
+                long v=Long.parseUnsignedLong(x,10);
+                out.add(Long.toUnsignedString(v));
+                out.add(String.format(Locale.ROOT,"%016x",v));
+            }
+        }catch(Exception ignored){}
+        return out;
+    }
+
+    private static String normalizeGameTitle(String raw){
+        if(raw==null)return "";
+        String x=java.text.Normalizer.normalize(raw,java.text.Normalizer.Form.NFD).replaceAll("\\p{M}+","");
+        x=x.toLowerCase(Locale.ROOT)
+            .replace("&"," and ")
+            .replaceAll("[^a-z0-9]+"," ")
+            .replaceAll("\\b(the|edition|version|ver|hd|remaster|remastered|deluxe|ultimate)\\b"," ")
+            .replaceAll("\\s+"," ")
+            .trim();
+        return x;
     }
 
     public NintendoInfo getNintendoInfo(String gameId){
