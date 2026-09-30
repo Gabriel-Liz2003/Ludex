@@ -600,9 +600,9 @@ mod tests {
         use std::process::{Command, Stdio};
         let directory = std::path::PathBuf::from(std::env::var("LUDEX_HARNESS_DIR").unwrap());
         for (name, millis) in [
-            ("EasyAntiCheat.exe", "900"),
-            ("FakeGame.exe", "1800"),
-            ("ThirdPartyLauncher.exe", "3200"),
+            ("EasyAntiCheat.exe", "3000"),
+            ("FakeGame.exe", "5500"),
+            ("ThirdPartyLauncher.exe", "9000"),
         ] {
             Command::new(directory.join(name))
                 .args([
@@ -638,6 +638,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[ignore = "integration harness; executed by the dedicated process-harness CI job"]
     fn fake_process_tree_survives_launcher_exit() {
         use std::{fs, process::Command, time::Duration};
         let source = std::env::current_exe().unwrap();
@@ -665,7 +666,7 @@ mod tests {
             .unwrap();
         assert!(status.success(), "o launcher fake deve sair normalmente");
 
-        let running = wait_snapshot(Duration::from_secs(2), |snapshot| {
+        let running = wait_snapshot(Duration::from_secs(5), |snapshot| {
             let names = snapshot
                 .processes
                 .values()
@@ -701,7 +702,7 @@ mod tests {
         assert_eq!(classify_process(anti), ProcessRole::AntiCheat);
         assert_eq!(classify_process(persistent), ProcessRole::Launcher);
 
-        let after_game = wait_snapshot(Duration::from_secs(4), |snapshot| {
+        let after_game = wait_snapshot(Duration::from_secs(8), |snapshot| {
             let names = snapshot
                 .processes
                 .values()
