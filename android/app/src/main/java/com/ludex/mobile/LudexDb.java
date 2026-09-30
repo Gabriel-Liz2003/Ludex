@@ -9,7 +9,7 @@ import java.util.*;
 
 public final class LudexDb extends SQLiteOpenHelper {
     public static final class GameRow {
-        public String id,title,platform,source,packageName,status;
+        public String id,title,platform,source,packageName,status,linkedProvider;
         public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo;
         public long seconds,updatedAt;
     }
@@ -93,9 +93,10 @@ public final class LudexDb extends SQLiteOpenHelper {
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id),"+
             "CASE WHEN lower(g.source) IN ('steam','steam-family') OR EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='steam') THEN 1 ELSE 0 END,"+
-            "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END "+
+            "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
+            "COALESCE((SELECT lower(gn.provider) FROM gamenative_games gn WHERE gn.game_id=g.id LIMIT 1),'') "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
-        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);g.gameNative=c.getInt(10)!=0;g.eden=c.getInt(11)!=0;g.emulated=g.eden||c.getInt(12)!=0;g.steam=c.getInt(13)!=0;g.nintendo=c.getInt(14)!=0;out.add(g);}}
+        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);g.gameNative=c.getInt(10)!=0;g.eden=c.getInt(11)!=0;g.emulated=g.eden||c.getInt(12)!=0;g.steam=c.getInt(13)!=0;g.nintendo=c.getInt(14)!=0;g.linkedProvider=c.getString(15);out.add(g);}}
         return out;
     }
 
