@@ -10,7 +10,8 @@ import java.util.*;
 public final class EpicLibraryClient {
     private static final String CLIENT_ID="34a02cf8f4414e29b15921876da36f9a";
     private static final String CLIENT_SECRET="daafbccc737745039dffe53d94fc76cf";
-    private static final String TOKEN_URL="https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token";
+    private static final String TOKEN_URL_PRIMARY="https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token";
+    private static final String TOKEN_URL_FALLBACK="https://account-public-service-prod.ol.epicgames.com/account/api/oauth/token";
     private static final String LIBRARY_URL="https://library-service.live.use1a.on.epicgames.com/library/api/public/items";
     private static final String PLAYTIME_URL="https://library-service.live.use1a.on.epicgames.com/library/api/public/playtime/account";
     private static final String CATALOG_URL="https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace";
@@ -113,7 +114,21 @@ public final class EpicLibraryClient {
 
     private static Credentials oauth(Map<String,String> form) throws Exception {
         String basic=Base64.getEncoder().encodeToString((CLIENT_ID+":"+CLIENT_SECRET).getBytes(StandardCharsets.UTF_8));
-        String text=request("POST",TOKEN_URL,"Basic "+basic,"application/x-www-form-urlencoded",encodeForm(form));
+        String encoded=encodeForm(form);
+        String text;
+        try{
+            text=request("POST",TOKEN_URL_PRIMARY,"Basic "+basic,"application/x-www-form-urlencoded",encoded);
+        }catch(UnknownHostException first){
+            try{
+                text=request("POST",TOKEN_URL_FALLBACK,"Basic "+basic,"application/x-www-form-urlencoded",encoded);
+            }catch(UnknownHostException second){
+                UnknownHostException combined=new UnknownHostException(
+                    "Não foi possível resolver os servidores de autenticação da Epic (prod03 nem prod). Verifique DNS privado, VPN ou bloqueador de rede."
+                );
+                combined.initCause(second);
+                throw combined;
+            }
+        }
         JSONObject json=new JSONObject(text);
         if(json.has("errorCode")){
             throw new IOException(json.optString("errorMessage",json.optString("errorCode","Falha no login Epic")));
