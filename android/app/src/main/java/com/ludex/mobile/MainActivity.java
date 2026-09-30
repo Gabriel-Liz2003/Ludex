@@ -66,7 +66,7 @@ public final class MainActivity extends AppCompatActivity {
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo, steamSyncInfo, nintendoSyncInfo, artworkInfo;
+    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, nintendoSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private String pendingEmulatorPackage;
@@ -251,6 +251,7 @@ public final class MainActivity extends AppCompatActivity {
         syncPanel=findViewById(R.id.sync_panel);
         syncInfo=findViewById(R.id.sync_info);
         steamSyncInfo=findViewById(R.id.steam_sync_info);
+        epicSyncInfo=findViewById(R.id.epic_sync_info);
         nintendoSyncInfo=findViewById(R.id.nintendo_sync_info);
         artworkInfo=findViewById(R.id.artwork_info);
         emptyState=findViewById(R.id.empty_state);
@@ -283,6 +284,8 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
         findViewById(R.id.steam_config).setOnClickListener(v->showSteamConfig());
         findViewById(R.id.steam_sync).setOnClickListener(v->syncSteamPlaytime(true));
+        findViewById(R.id.epic_connect).setOnClickListener(v->showEpicConnect());
+        findViewById(R.id.epic_sync).setOnClickListener(v->syncEpicLibrary(true));
         findViewById(R.id.nintendo_connect).setOnClickListener(v->showNintendoConnect());
         findViewById(R.id.nintendo_sync).setOnClickListener(v->syncNintendoPlaytime(true));
         findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
@@ -413,6 +416,7 @@ public final class MainActivity extends AppCompatActivity {
                     emulatorAdapter.setAll(emulators);
                     updateSummary(games);
                     updateSteamSyncInfo();
+                    updateEpicSyncInfo();
                     updateNintendoSyncInfo();
                     renderCurrent();
                     refresh.setEnabled(true);
@@ -471,6 +475,7 @@ public final class MainActivity extends AppCompatActivity {
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
                 "O Android não expõe o histórico oficial do Google Play; o Ludex usa Usage Access para medir o tempo em primeiro plano dos jogos neste aparelho e sincroniza esse tempo com o PC.");
             updateSteamSyncInfo();
+            updateEpicSyncInfo();
             updateNintendoSyncInfo();
             updateArtworkInfo();
             return;
