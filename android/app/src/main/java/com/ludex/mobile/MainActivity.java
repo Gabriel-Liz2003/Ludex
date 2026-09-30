@@ -663,10 +663,30 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
+    private boolean rowHasPlaytimeForFilter(LudexDb.GameRow row,LibraryFilter filter){
+        switch(filter){
+            case ALL:return row.seconds>0;
+            case ANDROID:return row.androidSeconds>0;
+            case STEAM:return row.steamSeconds>0;
+            case NINTENDO:return row.nintendoSeconds>0;
+            case EMULATED:return row.emulatedSeconds>0;
+            case EPIC:return row.otherSeconds>0&&"epic".equals(sourceKey(row));
+            case GOG:return row.otherSeconds>0&&"gog".equals(sourceKey(row));
+            case XBOX:{
+                String source=sourceKey(row);
+                return row.otherSeconds>0&&("xbox".equals(source)||"microsoft".equals(source));
+            }
+            case OTHER:
+                return row.otherSeconds>0&&!rowMatchesLibrary(row,LibraryFilter.EPIC)
+                    &&!rowMatchesLibrary(row,LibraryFilter.GOG)&&!rowMatchesLibrary(row,LibraryFilter.XBOX);
+            default:return false;
+        }
+    }
+
     private boolean groupMatchesLibrary(DisplayGame game,LibraryFilter filter){
         if(filter==LibraryFilter.ALL)return game.seconds>0;
         for(LudexDb.GameRow row:game.variants){
-            if(row.seconds>0&&rowMatchesLibrary(row,filter))return true;
+            if(rowHasPlaytimeForFilter(row,filter))return true;
         }
         return false;
     }
@@ -674,10 +694,9 @@ public final class MainActivity extends AppCompatActivity {
     private boolean groupMatchesTab(DisplayGame game,Tab mode){
         if(mode!=Tab.LIBRARY&&mode!=Tab.ANDROID&&mode!=Tab.EMULATED)return true;
         for(LudexDb.GameRow row:game.variants){
-            if(row.seconds<=0)continue;
-            if(mode==Tab.ANDROID&&"android".equalsIgnoreCase(row.source))return true;
-            if(mode==Tab.EMULATED&&row.emulated)return true;
-            if(mode==Tab.LIBRARY&&(!row.emulated||row.nintendo))return true;
+            if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
+            if(mode==Tab.EMULATED&&row.emulatedSeconds>0)return true;
+            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.otherSeconds>0))return true;
         }
         return false;
     }
@@ -701,18 +720,29 @@ public final class MainActivity extends AppCompatActivity {
     private String librariesLabel(DisplayGame game){
         LinkedHashSet<String> labels=new LinkedHashSet<>();
         for(LudexDb.GameRow row:game.variants){
-            if(row.seconds>0)labels.add(rowLibraryLabel(row));
+            if(row.androidSeconds>0)labels.add("Android");
+            if(row.steamSeconds>0)labels.add("Steam");
+            if(row.nintendoSeconds>0)labels.add("Nintendo");
+            if(row.emulatedSeconds>0)labels.add("Emulado");
+            if(row.otherSeconds>0)labels.add(rowLibraryLabel(row));
         }
         if(labels.isEmpty()&&game.primary!=null)labels.add(rowLibraryLabel(game.primary));
         return String.join(" + ",labels);
     }
 
+    private static void addPlaytime(Map<String,Long> totals,String label,long seconds){
+        if(seconds<=0)return;
+        totals.put(label,totals.getOrDefault(label,0L)+seconds);
+    }
+
     private String playtimeBreakdown(DisplayGame game){
         LinkedHashMap<String,Long> totals=new LinkedHashMap<>();
         for(LudexDb.GameRow row:game.variants){
-            if(row.seconds<=0)continue;
-            String label=rowLibraryLabel(row);
-            totals.put(label,totals.getOrDefault(label,0L)+row.seconds);
+            addPlaytime(totals,"Android",row.androidSeconds);
+            addPlaytime(totals,"Steam",row.steamSeconds);
+            addPlaytime(totals,"Nintendo",row.nintendoSeconds);
+            addPlaytime(totals,"Emulado",row.emulatedSeconds);
+            addPlaytime(totals,rowLibraryLabel(row),row.otherSeconds);
         }
         StringBuilder out=new StringBuilder();
         for(Map.Entry<String,Long> entry:totals.entrySet()){
