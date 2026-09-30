@@ -34,8 +34,13 @@ public final class LudexDb extends SQLiteOpenHelper {
         public final String titleId,imageUrl,platform;
         NintendoInfo(String titleId,String imageUrl,String platform){this.titleId=titleId;this.imageUrl=imageUrl;this.platform=platform;}
     }
+    public static final class SteamInfo {
+        public final String appId;
+        public final boolean familyShared;
+        SteamInfo(String appId,boolean familyShared){this.appId=appId;this.familyShared=familyShared;}
+    }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,11);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,12);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -47,6 +52,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,program_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
@@ -64,6 +70,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         if(oldV<9)db.execSQL("CREATE TABLE IF NOT EXISTS emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         if(oldV<10)db.execSQL("CREATE TABLE IF NOT EXISTS nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         if(oldV<11)db.execSQL("CREATE TABLE IF NOT EXISTS hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
+        if(oldV<12)db.execSQL("CREATE TABLE IF NOT EXISTS steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
@@ -114,6 +121,59 @@ public final class LudexDb extends SQLiteOpenHelper {
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         return count;
+    }
+
+    public int syncSteamLibrary(List<SteamPlaytimeClient.LibraryGame> games){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;long now=System.currentTimeMillis();
+        try{
+            for(SteamPlaytimeClient.LibraryGame item:games){
+                String gameId=null;
+                try(Cursor cur=db.rawQuery("SELECT game_id FROM steam_games WHERE app_id=? LIMIT 1",new String[]{item.appId})){
+                    if(cur.moveToFirst())gameId=cur.getString(0);
+                }
+                if(gameId==null){
+                    try(Cursor cur=db.rawQuery("SELECT game_id FROM gamenative_games WHERE lower(provider)='steam' AND external_id=? LIMIT 1",new String[]{item.appId})){
+                        if(cur.moveToFirst())gameId=cur.getString(0);
+                    }
+                }
+                if(gameId==null){
+                    ArrayList<String> matches=new ArrayList<>();
+                    try(Cursor cur=db.rawQuery("SELECT id FROM games WHERE source!='android' AND lower(trim(title))=lower(trim(?)) LIMIT 2",new String[]{item.title})){
+                        while(cur.moveToNext())matches.add(cur.getString(0));
+                    }
+                    if(matches.size()==1)gameId=matches.get(0);
+                }
+                if(gameId==null)gameId="steam:"+item.appId;
+
+                ContentValues g=new ContentValues();
+                g.put("id",gameId);g.put("title",item.title);g.put("platform","PC");
+                g.put("source",item.familyShared?"steam-family":"steam");g.put("installed",0);g.put("updated_at",now);
+                db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+
+                ContentValues gu=new ContentValues();
+                gu.put("title",item.title);gu.put("platform","PC");
+                gu.put("source",item.familyShared?"steam-family":"steam");gu.put("updated_at",now);
+                db.update("games",gu,"id=?",new String[]{gameId});
+
+                ContentValues s=new ContentValues();
+                s.put("game_id",gameId);s.put("app_id",item.appId);s.put("family_shared",item.familyShared?1:0);s.put("updated_at",now);
+                db.insertWithOnConflict("steam_games",null,s,SQLiteDatabase.CONFLICT_REPLACE);
+
+                ContentValues p=new ContentValues();
+                p.put("game_id",gameId);p.put("provider","steam");p.put("seconds",Math.max(0,item.seconds));p.put("updated_at",now);
+                db.insertWithOnConflict("imported_playtime",null,p,SQLiteDatabase.CONFLICT_REPLACE);
+                count++;
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return count;
+    }
+
+    public SteamInfo getSteamInfo(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT app_id,family_shared FROM steam_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            if(c.moveToFirst())return new SteamInfo(c.getString(0),c.getInt(1)!=0);
+        }
+        return null;
     }
 
     public int syncEdenGames(List<EdenLibraryScanner.ImportedGame> games){
