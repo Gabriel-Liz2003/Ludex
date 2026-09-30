@@ -313,10 +313,12 @@ public final class MainActivity extends AppCompatActivity {
 
                 String steamId=db.getSetting("steam.id64","");
                 String steamKey=SecretStore.get(this,"steam.api_key");
-                if(!steamId.isEmpty()&&!steamKey.isEmpty()){
+                String steamFamilyToken=SecretStore.get(this,"steam.family_token");
+                if(!steamId.isEmpty()&&(!steamKey.isEmpty()||!steamFamilyToken.isEmpty())){
                     try{
-                        syncSteamPlaytimeNow(steamId,steamKey);
-                        updated.add("Steam");
+                        SteamSyncResult steamResult=syncSteamLibraryNow(steamId,steamKey,steamFamilyToken);
+                        updated.add(steamResult.familyGames>0?"Steam + Família":"Steam");
+                        if(steamResult.familyError!=null&&!steamResult.familyError.isBlank())failed.add("Família Steam");
                     }catch(Exception e){failed.add("Steam");}
                 }
 
@@ -856,13 +858,15 @@ public final class MainActivity extends AppCompatActivity {
     private void updateSteamSyncInfo(){
         String steamId=db.getSetting("steam.id64","");
         boolean hasKey=!SecretStore.get(this,"steam.api_key").isEmpty();
+        boolean hasFamily=!SecretStore.get(this,"steam.family_token").isEmpty();
         long last=db.getSettingLong("steam.last_sync_ms",0);
-        if(steamId.isEmpty()||!hasKey){
-            steamSyncInfo.setText("Não configurado. Informe SteamID64 e API Key para importar o playtime dos jogos GameNative/Steam.");
+        if(steamId.isEmpty()||(!hasKey&&!hasFamily)){
+            steamSyncInfo.setText("Não configurado. Informe SteamID64 e conecte a Steam para importar biblioteca e horas.");
             return;
         }
         String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
-        steamSyncInfo.setText("Steam configurada · "+steamId+suffix);
+        String family=hasFamily?" · Família Steam ativa":"";
+        steamSyncInfo.setText("Steam configurada · "+steamId+family+suffix);
     }
 
     private void showSteamConfig(){
@@ -889,74 +893,125 @@ public final class MainActivity extends AppCompatActivity {
         keyLink.setText("Obter API Key na Steam ↗");
         keyLink.setTextColor(getColor(R.color.ludex_accent));
         keyLink.setTextSize(14);
-        keyLink.setPadding(0,pad/2,0,pad/2);
+        keyLink.setPadding(0,pad/3,0,pad/2);
         keyLink.setOnClickListener(v->{
             try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://steamcommunity.com/dev/apikey")));}
             catch(Exception e){toast("Não foi possível abrir a página da Steam");}
         });
         wrap.addView(keyLink,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        boolean alreadyHasFamily=!SecretStore.get(this,"steam.family_token").isEmpty();
+        EditText familyToken=new EditText(this);
+        familyToken.setSingleLine(false);
+        familyToken.setMinLines(2);
+        familyToken.setMaxLines(4);
+        familyToken.setHint(alreadyHasFamily?"Token Família (vazio = manter o atual)":"webapi_token da sessão Steam (opcional)");
+        familyToken.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        wrap.addView(familyToken,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView familyLink=new TextView(this);
+        familyLink.setText("Obter token da Família Steam ↗");
+        familyLink.setTextColor(getColor(R.color.ludex_accent));
+        familyLink.setTextSize(14);
+        familyLink.setPadding(0,pad/3,0,pad/2);
+        familyLink.setOnClickListener(v->{
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://store.steampowered.com/pointssummary/ajaxgetasyncconfig")));}
+            catch(Exception e){toast("Não foi possível abrir a página da Steam");}
+        });
+        wrap.addView(familyLink,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
         TextView note=new TextView(this);
-        note.setText("A API Key fica criptografada pelo Android Keystore e não entra no arquivo de sync/export.");
+        note.setText("A API Key e o token ficam criptografados pelo Android Keystore. A biblioteca própria usa a API oficial. Família Steam usa endpoints não documentados e o token pode precisar ser renovado.");
         note.setTextColor(getColor(R.color.ludex_muted));
         note.setTextSize(12);
         wrap.addView(note,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
 
         new MaterialAlertDialogBuilder(this)
             .setTitle("Steam no Android")
-            .setMessage("O Ludex usa o SteamID64 + GetOwnedGames para associar playtime pelo AppID dos atalhos do GameNative.")
+            .setMessage("Importa sua biblioteca Steam completa com horas. Se você configurar o token da Família Steam, também entram os jogos compartilhados e o seu tempo jogado neles.")
             .setView(wrap)
             .setNegativeButton("Cancelar",null)
             .setPositiveButton("Salvar",(d,w)->{
                 String id=steamId.getText()==null?"":steamId.getText().toString().trim();
                 String key=apiKey.getText()==null?"":apiKey.getText().toString().trim();
+                String familyRaw=familyToken.getText()==null?"":familyToken.getText().toString().trim();
                 if(!id.matches("\\d{16,20}")){toast("SteamID64 inválido");return;}
-                if(key.isEmpty()&&!alreadyHasKey){toast("Informe a Steam Web API Key");return;}
+                if(key.isEmpty()&&!alreadyHasKey&&familyRaw.isEmpty()&&!alreadyHasFamily){
+                    toast("Informe uma API Key ou o token da sessão Steam");
+                    return;
+                }
                 try{
                     db.setSetting("steam.id64",id);
                     if(!key.isEmpty())SecretStore.put(this,"steam.api_key",key);
+                    if(!familyRaw.isEmpty()){
+                        String clean=SteamPlaytimeClient.extractAccessToken(familyRaw);
+                        SecretStore.put(this,"steam.family_token",clean);
+                    }
                     updateSteamSyncInfo();
                     toast("Steam configurada");
                     syncSteamPlaytime(true);
-                }catch(Exception e){toast("Não foi possível proteger a API Key: "+e.getMessage());}
+                }catch(Exception e){toast("Não foi possível salvar a configuração Steam: "+e.getMessage());}
             }).show();
     }
 
     private static final class SteamSyncResult{
-        final int matched,total;
-        SteamSyncResult(int matched,int total){this.matched=matched;this.total=total;}
+        final int imported,total,familyGames;
+        final String familyError;
+        SteamSyncResult(int imported,int total,int familyGames,String familyError){
+            this.imported=imported;this.total=total;this.familyGames=familyGames;this.familyError=familyError;
+        }
     }
 
-    private SteamSyncResult syncSteamPlaytimeNow(String steamId,String key) throws Exception {
-        Map<String,Long> owned=SteamPlaytimeClient.getOwnedPlaytime(key,steamId);
-        List<LudexDb.GameNativeSteamLink> links=db.listGameNativeSteamLinks();
-        int matched=0;
-        for(LudexDb.GameNativeSteamLink link:links){
-            Long sec=owned.get(link.appId);
-            if(sec==null)continue;
-            db.replaceImportedPlaytime(link.gameId,"steam",sec);
-            matched++;
+    private SteamSyncResult syncSteamLibraryNow(String steamId,String key,String familyToken) throws Exception {
+        LinkedHashMap<String,SteamPlaytimeClient.LibraryGame> merged=new LinkedHashMap<>();
+        int familyGames=0;
+        String familyError=null;
+
+        if(familyToken!=null&&!familyToken.isEmpty()){
+            try{
+                SteamPlaytimeClient.FamilyLibrary family=SteamPlaytimeClient.getFamilyLibrary(familyToken,steamId);
+                db.setSetting("steam.family_group_id",family.familyGroupId);
+                for(SteamPlaytimeClient.LibraryGame game:family.games){
+                    merged.put(game.appId,game);
+                    if(game.familyShared)familyGames++;
+                }
+            }catch(Exception e){
+                familyError=e.getMessage()==null?"Falha na Família Steam":e.getMessage();
+                if(key==null||key.isEmpty())throw e;
+            }
         }
+
+        if(key!=null&&!key.isEmpty()){
+            List<SteamPlaytimeClient.LibraryGame> owned=SteamPlaytimeClient.getOwnedLibrary(key,steamId);
+            for(SteamPlaytimeClient.LibraryGame game:owned)merged.put(game.appId,game);
+        }
+
+        int imported=db.syncSteamLibrary(new ArrayList<>(merged.values()));
         db.setSetting("steam.last_sync_ms",Long.toString(System.currentTimeMillis()));
-        return new SteamSyncResult(matched,owned.size());
+        db.setSetting("steam.last_library_count",Integer.toString(merged.size()));
+        db.setSetting("steam.last_family_count",Integer.toString(familyGames));
+        return new SteamSyncResult(imported,merged.size(),familyGames,familyError);
     }
 
     private void syncSteamPlaytime(boolean notify){
         String steamId=db.getSetting("steam.id64","");
         String key=SecretStore.get(this,"steam.api_key");
-        if(steamId.isEmpty()||key.isEmpty()){
+        String familyToken=SecretStore.get(this,"steam.family_token");
+        if(steamId.isEmpty()||(key.isEmpty()&&familyToken.isEmpty())){
             if(notify)showSteamConfig();
             return;
         }
-        if(notify)toast("Sincronizando horas da Steam…");
+        if(notify)toast("Sincronizando biblioteca Steam…");
         io.execute(()->{
             try{
-                SteamSyncResult result=syncSteamPlaytimeNow(steamId,key);
+                SteamSyncResult result=syncSteamLibraryNow(steamId,key,familyToken);
                 runOnUiThread(()->{
                     updateSteamSyncInfo();
                     if(notify){
-                        if(result.total==0)toast("A Steam não retornou jogos. Confira SteamID64 e privacidade da conta.");
-                        else toast(result.matched+" jogos do GameNative receberam playtime da Steam");
+                        String msg=result.total+" jogos Steam sincronizados";
+                        if(result.familyGames>0)msg+=" · "+result.familyGames+" da família";
+                        if(result.familyError!=null&&!result.familyError.isBlank())msg+=" · Família falhou";
+                        toast(msg);
                     }
                     refreshAsync(false);
                 });
@@ -1216,6 +1271,15 @@ public final class MainActivity extends AppCompatActivity {
         view.setImageDrawable(fallback);view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
 
         final String expectedTag=g.id;
+        LudexDb.SteamInfo steamInfo=db.getSteamInfo(g.id);
+        if(steamInfo!=null&&!g.gameNative){
+            io.execute(()->{
+                android.graphics.Bitmap bmp=GameArtworkLoader.load(this,"steam",steamInfo.appId);
+                if(bmp==null)return;
+                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
+            });
+            return;
+        }
         if("nintendo".equals(g.source)){
             LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
             if(n!=null&&!n.imageUrl.isBlank()){
@@ -1263,7 +1327,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private String providerLabel(String source){
         if(source==null)return "Ludex";
-        switch(source){case "steam":return "Steam";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";default:return source;}
+        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";default:return source;}
     }
     static String format(long sec){long h=sec/3600,m=(sec%3600)/60;return h>0?h+"h "+m+"min":m+"min";}
     private void toast(String s){Snackbar.make(findViewById(R.id.root),s,Snackbar.LENGTH_LONG).show();}
