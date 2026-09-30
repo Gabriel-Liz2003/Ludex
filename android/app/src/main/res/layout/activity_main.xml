@@ -31,13 +31,13 @@
     </com.google.android.material.card.MaterialCardView>
 
     <LinearLayout
+        android:id="@+id/library_controls"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginHorizontal="16dp" android:layout_marginTop="12dp"
-        android:orientation="horizontal" android:gravity="center_vertical">
+        android:orientation="vertical">
 
         <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
             app:boxBackgroundMode="filled" app:boxBackgroundColor="@color/ludex_surface"
             app:boxCornerRadiusTopStart="14dp" app:boxCornerRadiusTopEnd="14dp"
             app:boxCornerRadiusBottomStart="14dp" app:boxCornerRadiusBottomEnd="14dp"
@@ -47,13 +47,26 @@
                 android:singleLine="true" android:textColor="@color/ludex_text" android:textColorHint="@color/ludex_muted"/>
         </com.google.android.material.textfield.TextInputLayout>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/sort_playtime"
-            style="@style/Widget.Material3.Button.OutlinedButton"
-            android:layout_width="wrap_content" android:layout_height="52dp"
-            android:layout_marginStart="8dp"
-            android:minWidth="74dp"
-            android:text="A–Z"/>
+        <LinearLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginTop="8dp">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/library_filter"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp" android:layout_height="48dp"
+                android:layout_weight="1"
+                android:text="Biblioteca: Todas"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/sort_playtime"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content" android:layout_height="48dp"
+                android:layout_marginStart="8dp"
+                android:minWidth="84dp"
+                android:text="A–Z"/>
+        </LinearLayout>
     </LinearLayout>
 
     <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
