@@ -30,6 +30,36 @@ import java.util.concurrent.*;
 
 public final class MainActivity extends AppCompatActivity {
     private enum Tab { LIBRARY, ANDROID, EMULATED, EMULATORS, SYNC }
+
+    private enum LibraryFilter {
+        ALL("all","Todas"),
+        ANDROID("android","Android"),
+        STEAM("steam","Steam"),
+        NINTENDO("nintendo","Nintendo"),
+        EPIC("epic","Epic"),
+        GOG("gog","GOG"),
+        XBOX("xbox","Xbox"),
+        EMULATED("emulated","Emulados"),
+        OTHER("other","Outros");
+
+        final String id,label;
+        LibraryFilter(String id,String label){this.id=id;this.label=label;}
+        static LibraryFilter fromId(String id){
+            for(LibraryFilter value:values())if(value.id.equals(id))return value;
+            return ALL;
+        }
+    }
+
+    private static final class DisplayGame {
+        final String key;
+        final ArrayList<LudexDb.GameRow> variants=new ArrayList<>();
+        String title="",status="Quero jogar";
+        long seconds;
+        boolean favorite;
+        LudexDb.GameRow primary;
+
+        DisplayGame(String key){this.key=key;}
+    }
     private LudexDb db;
     private RecyclerView list;
     private TextInputEditText search;
@@ -49,6 +79,7 @@ public final class MainActivity extends AppCompatActivity {
     private boolean pendingEdenShizuku;
     private boolean shizukuBinderReady;
     private boolean sortByPlaytime;
+    private LibraryFilter libraryFilter=LibraryFilter.ALL;
     private static final int SHIZUKU_GAMENATIVE_REQUEST=4201;
     private static final int SHIZUKU_EDEN_REQUEST=4202;
 
