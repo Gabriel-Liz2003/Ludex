@@ -10,8 +10,8 @@ import java.util.*;
 public final class LudexDb extends SQLiteOpenHelper {
     public static final class GameRow {
         public String id,title,platform,source,packageName,status,linkedProvider;
-        public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo;
-        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,otherSeconds;
+        public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo,epic;
+        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,epicSeconds,otherSeconds;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
     public static final class GameNativeLaunch {
@@ -39,8 +39,14 @@ public final class LudexDb extends SQLiteOpenHelper {
         public final boolean familyShared;
         SteamInfo(String appId,boolean familyShared){this.appId=appId;this.familyShared=familyShared;}
     }
+    public static final class EpicInfo {
+        public final String appName,namespace,catalogItemId,imageUrl;
+        EpicInfo(String appName,String namespace,String catalogItemId,String imageUrl){
+            this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.imageUrl=imageUrl;
+        }
+    }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,12);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,13);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -53,6 +59,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
@@ -71,6 +78,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         if(oldV<10)db.execSQL("CREATE TABLE IF NOT EXISTS nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         if(oldV<11)db.execSQL("CREATE TABLE IF NOT EXISTS hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
         if(oldV<12)db.execSQL("CREATE TABLE IF NOT EXISTS steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        if(oldV<13)db.execSQL("CREATE TABLE IF NOT EXISTS epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
@@ -96,13 +104,16 @@ public final class LudexDb extends SQLiteOpenHelper {
             "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'android%'),0),"+
             "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND (lower(s.provider) LIKE 'eden%' OR lower(s.provider) LIKE 'emulator%')),0),"+
             "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND (lower(p.provider) LIKE 'eden%' OR lower(p.provider) LIKE 'emulator%')),0),"+
-            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%'),0),"+
-            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) LIKE 'epic%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'epic%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%' AND lower(s.provider) NOT LIKE 'epic%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%' AND lower(p.provider) NOT LIKE 'epic%'),0),"+
             "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id),"+
             "CASE WHEN lower(g.source) IN ('steam','steam-family') OR EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='steam') THEN 1 ELSE 0 END,"+
             "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
+            "CASE WHEN lower(g.source)='epic' OR EXISTS(SELECT 1 FROM epic_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='epic') THEN 1 ELSE 0 END,"+
             "COALESCE((SELECT lower(gn.provider) FROM gamenative_games gn WHERE gn.game_id=g.id LIMIT 1),'') "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
@@ -115,10 +126,11 @@ public final class LudexDb extends SQLiteOpenHelper {
                 g.nintendoSeconds=Math.max(c.getLong(11),c.getLong(12));
                 g.androidSeconds=Math.max(c.getLong(13),c.getLong(14));
                 g.emulatedSeconds=Math.max(c.getLong(15),c.getLong(16));
-                g.otherSeconds=Math.max(c.getLong(17),c.getLong(18));
-                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.otherSeconds;
-                g.gameNative=c.getInt(19)!=0;g.eden=c.getInt(20)!=0;g.emulated=g.eden||c.getInt(21)!=0;
-                g.steam=c.getInt(22)!=0;g.nintendo=c.getInt(23)!=0;g.linkedProvider=c.getString(24);
+                g.epicSeconds=Math.max(c.getLong(17),c.getLong(18));
+                g.otherSeconds=Math.max(c.getLong(19),c.getLong(20));
+                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.epicSeconds+g.otherSeconds;
+                g.gameNative=c.getInt(21)!=0;g.eden=c.getInt(22)!=0;g.emulated=g.eden||c.getInt(23)!=0;
+                g.steam=c.getInt(24)!=0;g.nintendo=c.getInt(25)!=0;g.epic=c.getInt(26)!=0;g.linkedProvider=c.getString(27);
                 out.add(g);
             }
         }
@@ -200,6 +212,107 @@ public final class LudexDb extends SQLiteOpenHelper {
     public SteamInfo getSteamInfo(String gameId){
         try(Cursor c=getReadableDatabase().rawQuery("SELECT app_id,family_shared FROM steam_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
             if(c.moveToFirst())return new SteamInfo(c.getString(0),c.getInt(1)!=0);
+        }
+        return null;
+    }
+
+    public int syncEpicLibrary(List<EpicLibraryClient.LibraryGame> games){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;long now=System.currentTimeMillis();
+        LinkedHashSet<String> seen=new LinkedHashSet<>();
+        try{
+            for(EpicLibraryClient.LibraryGame item:games){
+                seen.add(item.appName);
+                String gameId=null;
+
+                try(Cursor cur=db.rawQuery("SELECT game_id FROM epic_games WHERE app_name=? COLLATE NOCASE LIMIT 1",new String[]{item.appName})){
+                    if(cur.moveToFirst())gameId=cur.getString(0);
+                }
+
+                if(gameId==null){
+                    String suffix="%:"+item.appName.toLowerCase(Locale.ROOT);
+                    try(Cursor cur=db.rawQuery(
+                        "SELECT game_id FROM gamenative_games WHERE lower(provider)='epic' AND (lower(external_id)=lower(?) OR lower(external_id) LIKE ?) LIMIT 1",
+                        new String[]{item.appName,suffix})){
+                        if(cur.moveToFirst())gameId=cur.getString(0);
+                    }
+                }
+
+                if(gameId==null){
+                    String wanted=normalizeGameTitle(item.title);
+                    String candidate=null;int matches=0;
+                    try(Cursor cur=db.rawQuery(
+                        "SELECT game_id,title FROM gamenative_games WHERE lower(provider)='epic'",
+                        null)){
+                        while(cur.moveToNext()){
+                            if(normalizeGameTitle(cur.getString(1)).equals(wanted)){
+                                candidate=cur.getString(0);matches++;
+                            }
+                        }
+                    }
+                    if(matches==1)gameId=candidate;
+                }
+
+                boolean created=false;
+                if(gameId==null){
+                    gameId="epic:"+item.appName;
+                    ContentValues g=new ContentValues();
+                    g.put("id",gameId);g.put("title",item.title);g.put("platform","PC");g.put("source","epic");
+                    g.put("installed",0);g.put("updated_at",now);
+                    db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+                    created=true;
+                }
+
+                ContentValues gu=new ContentValues();
+                gu.put("title",item.title);gu.put("platform","PC");gu.put("updated_at",now);
+                if(created)gu.put("source","epic");
+                db.update("games",gu,"id=?",new String[]{gameId});
+
+                ContentValues e=new ContentValues();
+                e.put("game_id",gameId);e.put("app_name",item.appName);e.put("namespace",item.namespace);
+                e.put("catalog_item_id",item.catalogItemId);e.put("image_url",item.imageUrl);e.put("updated_at",now);
+                db.insertWithOnConflict("epic_games",null,e,SQLiteDatabase.CONFLICT_REPLACE);
+
+                ContentValues p=new ContentValues();
+                p.put("game_id",gameId);p.put("provider","epic");p.put("seconds",Math.max(0,item.seconds));p.put("updated_at",now);
+                db.insertWithOnConflict("imported_playtime",null,p,SQLiteDatabase.CONFLICT_REPLACE);
+                count++;
+            }
+
+            ArrayList<String> staleIds=new ArrayList<>();
+            ArrayList<String> staleNames=new ArrayList<>();
+            try(Cursor cur=db.rawQuery("SELECT game_id,app_name FROM epic_games",null)){
+                while(cur.moveToNext()){
+                    if(!seen.contains(cur.getString(1))){
+                        staleIds.add(cur.getString(0));
+                        staleNames.add(cur.getString(1));
+                    }
+                }
+            }
+            for(int i=0;i<staleIds.size();i++){
+                String id=staleIds.get(i),name=staleNames.get(i);
+                db.delete("epic_games","app_name=?",new String[]{name});
+                db.delete("imported_playtime","game_id=? AND lower(provider) LIKE 'epic%'",new String[]{id});
+                db.execSQL(
+                    "DELETE FROM games WHERE id=? AND source='epic' "+
+                    "AND NOT EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=games.id) "+
+                    "AND NOT EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=games.id) "+
+                    "AND NOT EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=games.id) "+
+                    "AND NOT EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=games.id) "+
+                    "AND NOT EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=games.id)",
+                    new Object[]{id}
+                );
+            }
+
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return count;
+    }
+
+    public EpicInfo getEpicInfo(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT app_name,namespace,catalog_item_id,image_url FROM epic_games WHERE game_id=? LIMIT 1",
+            new String[]{gameId})){
+            if(c.moveToFirst())return new EpicInfo(c.getString(0),c.getString(1),c.getString(2),c.getString(3));
         }
         return null;
     }
