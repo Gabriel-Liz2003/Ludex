@@ -1308,6 +1308,177 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void updateEpicSyncInfo(){
+        boolean connected=!SecretStore.get(this,"epic.refresh_token").isEmpty();
+        long last=db.getSettingLong("epic.last_sync_ms",0);
+        if(!connected){
+            epicSyncInfo.setText("Conta Epic não conectada. Conecte para importar biblioteca e horas jogadas.");
+            return;
+        }
+        String name=db.getSetting("epic.display_name","");
+        String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
+        String who=name.isBlank()?"Conta Epic conectada":"Epic conectada · "+name;
+        epicSyncInfo.setText(who+suffix);
+    }
+
+    private void saveEpicCredentials(EpicLibraryClient.Credentials credentials) throws Exception {
+        SecretStore.put(this,"epic.access_token",credentials.accessToken);
+        SecretStore.put(this,"epic.refresh_token",credentials.refreshToken);
+        db.setSetting("epic.account_id",credentials.accountId);
+        db.setSetting("epic.display_name",credentials.displayName);
+        db.setSetting("epic.expires_at_ms",Long.toString(credentials.expiresAtMs));
+    }
+
+    private void clearEpicCredentials(){
+        SecretStore.remove(this,"epic.access_token");
+        SecretStore.remove(this,"epic.refresh_token");
+        db.setSetting("epic.account_id","");
+        db.setSetting("epic.display_name","");
+        db.setSetting("epic.expires_at_ms","0");
+        updateEpicSyncInfo();
+    }
+
+    private EpicLibraryClient.Credentials validEpicCredentials() throws Exception {
+        String access=SecretStore.get(this,"epic.access_token");
+        String refresh=SecretStore.get(this,"epic.refresh_token");
+        String account=db.getSetting("epic.account_id","");
+        String display=db.getSetting("epic.display_name","");
+        long expires=db.getSettingLong("epic.expires_at_ms",0);
+        if(refresh.isEmpty())throw new IllegalStateException("Conta Epic não conectada");
+
+        if(!access.isEmpty()&&!account.isEmpty()&&expires>System.currentTimeMillis()+5*60*1000L){
+            return new EpicLibraryClient.Credentials(access,refresh,account,display,expires);
+        }
+
+        EpicLibraryClient.Credentials renewed=EpicLibraryClient.refresh(refresh);
+        saveEpicCredentials(renewed);
+        return renewed;
+    }
+
+    private static final class EpicSyncResult{
+        final int total,played;
+        EpicSyncResult(int total,int played){this.total=total;this.played=played;}
+    }
+
+    private EpicSyncResult syncEpicLibraryNow() throws Exception {
+        EpicLibraryClient.Credentials credentials=validEpicCredentials();
+        List<EpicLibraryClient.LibraryGame> library=EpicLibraryClient.getOwnedLibrary(credentials);
+        int played=0;
+        for(EpicLibraryClient.LibraryGame game:library)if(game.seconds>0)played++;
+        db.syncEpicLibrary(library);
+        db.setSetting("epic.last_sync_ms",Long.toString(System.currentTimeMillis()));
+        db.setSetting("epic.last_library_count",Integer.toString(library.size()));
+        db.setSetting("epic.last_played_count",Integer.toString(played));
+        return new EpicSyncResult(library.size(),played);
+    }
+
+    private void syncEpicLibrary(boolean notify){
+        if(SecretStore.get(this,"epic.refresh_token").isEmpty()){
+            if(notify)showEpicConnect();
+            return;
+        }
+        if(notify)toast("Sincronizando biblioteca Epic…");
+        io.execute(()->{
+            try{
+                EpicSyncResult result=syncEpicLibraryNow();
+                runOnUiThread(()->{
+                    updateEpicSyncInfo();
+                    if(notify)toast(result.total+" jogos Epic sincronizados · "+result.played+" com horas");
+                    refreshAsync(false);
+                });
+            }catch(Exception e){
+                String message=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                runOnUiThread(()->{
+                    updateEpicSyncInfo();
+                    toast("Falha na Epic: "+message);
+                });
+            }
+        });
+    }
+
+    private void showEpicConnect(){
+        boolean connected=!SecretStore.get(this,"epic.refresh_token").isEmpty();
+        if(connected){
+            String name=db.getSetting("epic.display_name","");
+            new MaterialAlertDialogBuilder(this)
+                .setTitle("Epic Games")
+                .setMessage((name.isBlank()?"Conta conectada":"Conectado como "+name)+
+                    ". O Ludex importa sua biblioteca e o playtime registrado pela Epic.")
+                .setNegativeButton("Fechar",null)
+                .setNeutralButton("Desconectar",(d,w)->{
+                    clearEpicCredentials();
+                    toast("Conta Epic desconectada");
+                })
+                .setPositiveButton("Sincronizar",(d,w)->syncEpicLibrary(true))
+                .show();
+            return;
+        }
+
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,8,pad,0);
+
+        TextView openLogin=new TextView(this);
+        openLogin.setText("1. Abrir login oficial da Epic ↗");
+        openLogin.setTextColor(getColor(R.color.ludex_accent));
+        openLogin.setTextSize(15);
+        openLogin.setPadding(0,pad/3,0,pad/2);
+        openLogin.setOnClickListener(v->{
+            try{
+                startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(EpicLibraryClient.loginUrl())));
+                toast("Depois do login, copie o JSON ou authorizationCode e volte ao Ludex");
+            }catch(Exception e){toast("Não foi possível abrir o login da Epic");}
+        });
+        wrap.addView(openLogin,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText code=new EditText(this);
+        code.setSingleLine(false);
+        code.setMinLines(3);
+        code.setMaxLines(6);
+        code.setHint("2. Cole o JSON, URL ou authorizationCode");
+        code.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        wrap.addView(code,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView note=new TextView(this);
+        note.setText("O login acontece no site oficial da Epic. O Ludex não recebe sua senha. Access/refresh tokens ficam criptografados pelo Android Keystore.");
+        note.setTextColor(getColor(R.color.ludex_muted));
+        note.setTextSize(12);
+        note.setPadding(0,pad/2,0,0);
+        wrap.addView(note,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Conectar Epic Games")
+            .setMessage("Faça login no navegador. A página de retorno mostra um authorizationCode; você pode colar o JSON inteiro.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Conectar",(d,w)->{
+                String raw=code.getText()==null?"":code.getText().toString().trim();
+                if(raw.isEmpty()){toast("Cole o authorizationCode da Epic");return;}
+                connectEpic(raw);
+            })
+            .show();
+    }
+
+    private void connectEpic(String rawCode){
+        toast("Conectando à Epic…");
+        io.execute(()->{
+            try{
+                EpicLibraryClient.Credentials credentials=EpicLibraryClient.exchangeAuthorizationCode(rawCode);
+                saveEpicCredentials(credentials);
+                EpicSyncResult result=syncEpicLibraryNow();
+                runOnUiThread(()->{
+                    updateEpicSyncInfo();
+                    toast("Epic conectada · "+result.total+" jogos sincronizados");
+                    refreshAsync(false);
+                });
+            }catch(Exception e){
+                String message=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                runOnUiThread(()->toast("Falha ao conectar Epic: "+message));
+            }
+        });
+    }
+
     private void updateNintendoSyncInfo(){
         boolean connected=!SecretStore.get(this,"nintendo.session_token").isEmpty();
         long last=db.getSettingLong("nintendo.last_sync_ms",0);
