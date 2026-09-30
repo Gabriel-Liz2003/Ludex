@@ -46,9 +46,14 @@ public final class EpicLibraryClient {
     }
 
     private static final class RawItem {
-        final String appName,namespace,catalogItemId,country;
-        RawItem(String appName,String namespace,String catalogItemId,String country){
-            this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.country=country;
+        final String appName,namespace,catalogItemId,country,title,imageUrl;
+        RawItem(String appName,String namespace,String catalogItemId,String country,String title,String imageUrl){
+            this.appName=appName;
+            this.namespace=namespace;
+            this.catalogItemId=catalogItemId;
+            this.country=country;
+            this.title=title==null?"":title.trim();
+            this.imageUrl=imageUrl==null?"":imageUrl.trim();
         }
     }
 
@@ -153,37 +158,51 @@ public final class EpicLibraryClient {
 
         List<RawItem> raw=fetchLibrary(credentials.accessToken);
         Map<String,Long> playtime=fetchPlaytime(credentials.accessToken,credentials.accountId);
-        ArrayList<LibraryGame> out=new ArrayList<>();
 
-        LinkedHashMap<String,List<RawItem>> groups=new LinkedHashMap<>();
+        // A Library Service já devolve título/metadados para a maioria dos itens.
+        // Só consulte o catálogo para registros JOGADOS que ainda estejam sem nome legível.
+        LinkedHashMap<String,List<RawItem>> unresolvedByNamespace=new LinkedHashMap<>();
         for(RawItem item:raw){
-            String key=item.namespace+"\n"+(item.country.isBlank()?"BR":item.country);
-            groups.computeIfAbsent(key,k->new ArrayList<>()).add(item);
+            long seconds=playtime.getOrDefault(item.appName,0L);
+            if(seconds<=0||isReadableTitle(item.title))continue;
+            unresolvedByNamespace.computeIfAbsent(item.namespace,k->new ArrayList<>()).add(item);
         }
 
-        for(List<RawItem> group:groups.values()){
-            for(int start=0;start<group.size();start+=20){
-                List<RawItem> chunk=group.subList(start,Math.min(start+20,group.size()));
-                JSONObject catalog=null;
-                try{catalog=fetchCatalog(credentials.accessToken,chunk);}catch(Exception ignored){}
-
-                for(RawItem item:chunk){
-                    JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
-                    if(data==null){
-                        try{
-                            JSONObject single=fetchCatalog(credentials.accessToken,Collections.singletonList(item));
-                            data=single.optJSONObject(item.catalogItemId);
-                        }catch(Exception ignored){}
+        HashMap<String,JSONObject> resolvedCatalog=new HashMap<>();
+        for(List<RawItem> group:unresolvedByNamespace.values()){
+            for(int start=0;start<group.size();start+=50){
+                List<RawItem> chunk=group.subList(start,Math.min(start+50,group.size()));
+                try{
+                    JSONObject catalog=fetchCatalog(credentials.accessToken,chunk);
+                    for(RawItem item:chunk){
+                        JSONObject data=catalog.optJSONObject(item.catalogItemId);
+                        if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
                     }
-                    if(data!=null&&data.has("mainGameItem"))continue;
-
-                    String title=data==null?item.appName:data.optString("title",item.appName).trim();
-                    if(title.isEmpty())title=item.appName;
-                    String image=data==null?"":bestImage(data.optJSONArray("keyImages"));
-                    long seconds=playtime.getOrDefault(item.appName,0L);
-                    out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds));
-                }
+                }catch(Exception ignored){}
             }
+        }
+
+        ArrayList<LibraryGame> out=new ArrayList<>();
+        for(RawItem item:raw){
+            long seconds=playtime.getOrDefault(item.appName,0L);
+            JSONObject data=resolvedCatalog.get(item.catalogItemId);
+
+            if(data!=null&&(data.has("mainGameItem")||isEditorResource(data)))continue;
+
+            String title=item.title;
+            if(!isReadableTitle(title)&&data!=null)title=data.optString("title","").trim();
+
+            // Nunca use appName/artifactId como título. Esses IDs eram os hexadecimais
+            // que apareciam como jogos na biblioteca e inflavam o resumo.
+            if(!isReadableTitle(title)){
+                // Itens não jogados podem ser mantidos fora do catálogo sem custo;
+                // itens jogados sem metadata confiável também são descartados da UI.
+                continue;
+            }
+
+            String image=item.imageUrl;
+            if(image.isBlank()&&data!=null)image=bestImage(data.optJSONArray("keyImages"));
+            out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds));
         }
 
         LinkedHashMap<String,LibraryGame> unique=new LinkedHashMap<>();
@@ -197,7 +216,8 @@ public final class EpicLibraryClient {
         HashSet<String> seenCursors=new HashSet<>();
 
         do{
-            StringBuilder url=new StringBuilder(LIBRARY_URL).append("?includeMetadata=true");
+            StringBuilder url=new StringBuilder(LIBRARY_URL)
+                .append("?includeMetadata=true&platform=Windows&excludeNs=ue&limit=200");
             if(cursor!=null&&!cursor.isBlank())url.append("&cursor=").append(enc(cursor));
             JSONObject json=new JSONObject(request("GET",url.toString(),"Bearer "+accessToken,null,null));
             JSONArray records=json.optJSONArray("records");
@@ -205,6 +225,10 @@ public final class EpicLibraryClient {
                 for(int i=0;i<records.length();i++){
                     JSONObject record=records.optJSONObject(i);
                     if(record==null)continue;
+
+                    String recordType=record.optString("recordType","APPLICATION");
+                    if(!recordType.isBlank()&&!"APPLICATION".equalsIgnoreCase(recordType))continue;
+
                     String appName=record.optString("appName","").trim();
                     String namespace=record.optString("namespace","").trim();
                     String catalog=record.optString("catalogItemId","").trim();
@@ -212,16 +236,26 @@ public final class EpicLibraryClient {
                     if(appName.isEmpty()||namespace.isEmpty()||catalog.isEmpty())continue;
                     if("ue".equalsIgnoreCase(namespace)||"89efe5924d3d467c839449ab6ab52e7f".equalsIgnoreCase(namespace))continue;
                     if("PRIVATE".equalsIgnoreCase(sandbox)||"1".equals(appName))continue;
-                    JSONArray platforms=record.optJSONArray("platform");
-                    if(platforms!=null&&platforms.length()>0){
-                        boolean windows=false;
-                        for(int j=0;j<platforms.length();j++){
-                            String platform=platforms.optString(j,"");
-                            if("Windows".equalsIgnoreCase(platform)||"Win32".equalsIgnoreCase(platform)){windows=true;break;}
-                        }
-                        if(!windows)continue;
+
+                    JSONObject metadata=record.optJSONObject("metadata");
+                    String title=firstNonBlank(
+                        record.optString("title",""),
+                        metadata==null?"":metadata.optString("title","")
+                    );
+                    String image=bestImage(record.optJSONArray("keyImages"));
+                    if(image.isBlank()&&metadata!=null){
+                        image=bestImage(metadata.optJSONArray("keyImages"));
+                        if(image.isBlank())image=metadata.optString("image","");
                     }
-                    out.add(new RawItem(appName,namespace,catalog,record.optString("country","BR")));
+
+                    out.add(new RawItem(
+                        appName,
+                        namespace,
+                        catalog,
+                        record.optString("country","BR"),
+                        title,
+                        image
+                    ));
                 }
             }
 
@@ -252,14 +286,64 @@ public final class EpicLibraryClient {
         if(items==null||items.isEmpty())return new JSONObject();
         RawItem first=items.get(0);
         String country=first.country==null||first.country.isBlank()?"BR":first.country;
-        StringBuilder url=new StringBuilder(CATALOG_URL)
-            .append('/').append(encPath(first.namespace))
-            .append("/bulk/items?");
-        for(RawItem item:items)url.append("id=").append(enc(item.catalogItemId)).append('&');
-        url.append("includeDLCDetails=true&includeMainGameDetails=true")
-            .append("&country=").append(enc(country))
-            .append("&locale=pt-BR");
-        return new JSONObject(request("GET",url.toString(),"Bearer "+accessToken,null,null));
+        ArrayList<String> ids=new ArrayList<>();
+        for(RawItem item:items){
+            if(first.namespace.equals(item.namespace)&&!item.catalogItemId.isBlank())ids.add(item.catalogItemId);
+        }
+        String joined=String.join(",",ids);
+        String url=CATALOG_URL+'/'+encPath(first.namespace)+"/bulk/items?id="+enc(joined)+
+            "&includeDLCDetails=true&includeMainGameDetails=true"+
+            "&country="+enc(country)+"&locale=pt-BR";
+        return new JSONObject(request("GET",url,"Bearer "+accessToken,null,null));
+    }
+
+    private static boolean isReadableTitle(String title){
+        if(title==null)return false;
+        String value=title.trim();
+        if(value.length()<2)return false;
+        // Artifact IDs costumam ser hashes/UUIDs. Nunca os exponha como nome de jogo.
+        if(value.matches("(?i)[0-9a-f]{24,}"))return false;
+        if(value.matches("(?i)[0-9a-f]{8}-[0-9a-f-]{20,}"))return false;
+        boolean hasLetter=false;
+        for(int i=0;i<value.length();i++){
+            if(Character.isLetter(value.charAt(i))){hasLetter=true;break;}
+        }
+        return hasLetter;
+    }
+
+    private static boolean isEditorResource(JSONObject item){
+        if(item==null)return false;
+        if("AUDIENCE".equalsIgnoreCase(item.optString("entitlementType","")))return true;
+
+        JSONArray categories=item.optJSONArray("categories");
+        if(categories!=null){
+            for(int i=0;i<categories.length();i++){
+                JSONObject category=categories.optJSONObject(i);
+                if(category==null)continue;
+                String path=category.optString("path","");
+                if("type/format-item".equalsIgnoreCase(path)||path.toLowerCase(Locale.ROOT).startsWith("asset-format"))return true;
+            }
+        }
+
+        JSONObject attrs=item.optJSONObject("customAttributes");
+        if(attrs!=null&&attrs.has("ListingIdentifier"))return true;
+
+        JSONArray releases=item.optJSONArray("releaseInfo");
+        if(releases!=null){
+            for(int i=0;i<releases.length();i++){
+                JSONObject release=releases.optJSONObject(i);
+                if(release!=null&&release.has("compatibleApps"))return true;
+            }
+        }
+        return false;
+    }
+
+    private static String firstNonBlank(String... values){
+        if(values==null)return "";
+        for(String value:values){
+            if(value!=null&&!value.trim().isEmpty())return value.trim();
+        }
+        return "";
     }
 
     private static String bestImage(JSONArray images){
