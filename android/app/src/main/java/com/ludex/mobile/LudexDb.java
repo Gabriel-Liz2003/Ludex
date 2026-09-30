@@ -11,7 +11,7 @@ public final class LudexDb extends SQLiteOpenHelper {
     public static final class GameRow {
         public String id,title,platform,source,packageName,status,linkedProvider;
         public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo;
-        public long seconds,updatedAt;
+        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,otherSeconds;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
     public static final class GameNativeLaunch {
@@ -88,7 +88,16 @@ public final class LudexDb extends SQLiteOpenHelper {
         String sql="SELECT g.id,g.title,g.platform,g.source,g.package_name,"+
             "CASE WHEN g.installed=1 OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id) OR EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id) THEN 1 ELSE 0 END,"+
             "g.favorite,g.status,g.updated_at,"+
-            "MAX(COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id),0),COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id),0)) total,"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) LIKE 'steam%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'steam%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) LIKE 'nintendo%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'nintendo%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) LIKE 'android%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'android%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND (lower(s.provider) LIKE 'eden%' OR lower(s.provider) LIKE 'emulator%')),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND (lower(p.provider) LIKE 'eden%' OR lower(p.provider) LIKE 'emulator%')),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%'),0),"+
             "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id),"+
@@ -96,7 +105,23 @@ public final class LudexDb extends SQLiteOpenHelper {
             "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
             "COALESCE((SELECT lower(gn.provider) FROM gamenative_games gn WHERE gn.game_id=g.id LIMIT 1),'') "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
-        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){while(c.moveToNext()){GameRow g=new GameRow();g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;g.status=c.getString(7);g.updatedAt=c.getLong(8);g.seconds=c.getLong(9);g.gameNative=c.getInt(10)!=0;g.eden=c.getInt(11)!=0;g.emulated=g.eden||c.getInt(12)!=0;g.steam=c.getInt(13)!=0;g.nintendo=c.getInt(14)!=0;g.linkedProvider=c.getString(15);out.add(g);}}
+        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
+            while(c.moveToNext()){
+                GameRow g=new GameRow();
+                g.id=c.getString(0);g.title=c.getString(1);g.platform=c.getString(2);g.source=c.getString(3);
+                g.packageName=c.isNull(4)?null:c.getString(4);g.installed=c.getInt(5)!=0;g.favorite=c.getInt(6)!=0;
+                g.status=c.getString(7);g.updatedAt=c.getLong(8);
+                g.steamSeconds=Math.max(c.getLong(9),c.getLong(10));
+                g.nintendoSeconds=Math.max(c.getLong(11),c.getLong(12));
+                g.androidSeconds=Math.max(c.getLong(13),c.getLong(14));
+                g.emulatedSeconds=Math.max(c.getLong(15),c.getLong(16));
+                g.otherSeconds=Math.max(c.getLong(17),c.getLong(18));
+                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.otherSeconds;
+                g.gameNative=c.getInt(19)!=0;g.eden=c.getInt(20)!=0;g.emulated=g.eden||c.getInt(21)!=0;
+                g.steam=c.getInt(22)!=0;g.nintendo=c.getInt(23)!=0;g.linkedProvider=c.getString(24);
+                out.add(g);
+            }
+        }
         return out;
     }
 
