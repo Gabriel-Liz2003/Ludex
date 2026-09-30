@@ -256,14 +256,19 @@ public final class MainActivity extends AppCompatActivity {
         emptyState=findViewById(R.id.empty_state);
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setItemAnimator(new DefaultItemAnimator());
-        gameAdapter=new GameAdapter(this::showGame,this::launchGame);
+        gameAdapter=new GameAdapter(this::showGame,game->{
+            LudexDb.GameRow launch=launchVariant(game);
+            if(launch!=null)launchGame(launch);
+        });
         emulatorAdapter=new EmulatorAdapter(this::launchEmulator,this::pickRomFor,this::connectEmulatorLibrary);
         list.setAdapter(gameAdapter);
     }
 
     private void setupUi(){
         sortByPlaytime="playtime".equals(db.getSetting("library.sort","title"));
+        libraryFilter=LibraryFilter.fromId(db.getSetting("library.filter","all"));
         updateSortButton();
+        updateLibraryFilterButton();
         findViewById(R.id.refresh).setOnClickListener(v->refreshAllPlaytimeAsync());
         findViewById(R.id.sort_playtime).setOnClickListener(v->{
             sortByPlaytime=!sortByPlaytime;
@@ -271,6 +276,7 @@ public final class MainActivity extends AppCompatActivity {
             updateSortButton();
             renderCurrent();
         });
+        findViewById(R.id.library_filter).setOnClickListener(v->showLibraryFilter());
         findViewById(R.id.usage_access).setOnClickListener(v->openUsageAccess());
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
@@ -299,6 +305,32 @@ public final class MainActivity extends AppCompatActivity {
     private void updateSortButton(){
         Button sort=findViewById(R.id.sort_playtime);
         sort.setText(sortByPlaytime?"Horas ↓":"A–Z");
+    }
+
+    private void updateLibraryFilterButton(){
+        Button filter=findViewById(R.id.library_filter);
+        filter.setText("Biblioteca: "+libraryFilter.label);
+    }
+
+    private void showLibraryFilter(){
+        LibraryFilter[] filters=LibraryFilter.values();
+        String[] labels=new String[filters.length];
+        int selected=0;
+        for(int i=0;i<filters.length;i++){
+            labels[i]=filters[i].label;
+            if(filters[i]==libraryFilter)selected=i;
+        }
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Biblioteca")
+            .setSingleChoiceItems(labels,selected,(dialog,which)->{
+                libraryFilter=filters[which];
+                db.setSetting("library.filter",libraryFilter.id);
+                updateLibraryFilterButton();
+                dialog.dismiss();
+                renderCurrent();
+            })
+            .setNegativeButton("Cancelar",null)
+            .show();
     }
 
     private void refreshAllPlaytimeAsync(){
@@ -433,8 +465,7 @@ public final class MainActivity extends AppCompatActivity {
         syncPanel.setVisibility(sync?View.VISIBLE:View.GONE);
         list.setVisibility(sync?View.GONE:View.VISIBLE);
         boolean gamesTab=tab==Tab.LIBRARY||tab==Tab.ANDROID||tab==Tab.EMULATED;
-        search.setVisibility(gamesTab?View.VISIBLE:View.GONE);
-        findViewById(R.id.sort_playtime).setVisibility(gamesTab?View.VISIBLE:View.GONE);
+        findViewById(R.id.library_controls).setVisibility(gamesTab?View.VISIBLE:View.GONE);
         emptyState.setVisibility(View.GONE);
         if(sync){
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
@@ -456,14 +487,14 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void updateSummary(List<LudexDb.GameRow> games){
-        int android=0,emulated=0,other=0; long seconds=0;
-        for(LudexDb.GameRow g:games){
-            if("android".equals(g.source))android++;
-            else if(g.emulated)emulated++;
-            else other++;
-            seconds+=g.seconds;
+        List<DisplayGame> grouped=buildDisplayGames(games);
+        int played=0;long seconds=0;
+        for(DisplayGame game:grouped){
+            if(game.seconds<=0)continue;
+            played++;
+            seconds+=game.seconds;
         }
-        summary.setText(games.size()+" jogos · "+android+" Android · "+emulated+" emulados · "+other+" outros · "+format(seconds));
+        summary.setText(played+" jogos com horas · "+format(seconds)+" no total");
     }
 
     private void scanInstalledGames(){
@@ -554,48 +585,234 @@ public final class MainActivity extends AppCompatActivity {
         return changed;
     }
 
-    private void showGame(LudexDb.GameRow g){
+    private static String canonicalGameTitle(String raw){
+        if(raw==null)return "";
+        String x=java.text.Normalizer.normalize(raw,java.text.Normalizer.Form.NFD).replaceAll("\\p{M}+","");
+        return x.toLowerCase(Locale.ROOT)
+            .replace("&","and")
+            .replaceAll("[^\\p{L}\\p{N}]+","")
+            .trim();
+    }
+
+    private static int titleQuality(String title){
+        if(title==null)return 0;
+        int spaces=0;
+        for(int i=0;i<title.length();i++)if(Character.isWhitespace(title.charAt(i)))spaces++;
+        return spaces*20+title.length();
+    }
+
+    private static boolean isLaunchable(LudexDb.GameRow g){
+        return g!=null&&g.installed&&(g.packageName!=null||g.gameNative||g.emulated);
+    }
+
+    private static int primaryScore(LudexDb.GameRow g){
+        int score=titleQuality(g.title);
+        if(isLaunchable(g))score+=1000;
+        if(g.installed)score+=200;
+        if(g.steam||g.nintendo)score+=50;
+        return score;
+    }
+
+    private List<DisplayGame> buildDisplayGames(List<LudexDb.GameRow> rows){
+        LinkedHashMap<String,DisplayGame> grouped=new LinkedHashMap<>();
+        for(LudexDb.GameRow row:rows){
+            String key=canonicalGameTitle(row.title);
+            if(key.isEmpty())key="id:"+row.id;
+            DisplayGame game=grouped.computeIfAbsent(key,DisplayGame::new);
+            game.variants.add(row);
+            game.seconds+=Math.max(0,row.seconds);
+            game.favorite|=row.favorite;
+            if(game.title.isEmpty()||titleQuality(row.title)>titleQuality(game.title))game.title=row.title;
+            if(game.primary==null||primaryScore(row)>primaryScore(game.primary))game.primary=row;
+        }
+        for(DisplayGame game:grouped.values()){
+            if(game.primary!=null)game.status=game.primary.status;
+        }
+        return new ArrayList<>(grouped.values());
+    }
+
+    private static String sourceKey(LudexDb.GameRow g){
+        if(g==null)return "";
+        if(g.steam)return "steam";
+        if(g.nintendo)return "nintendo";
+        if("android".equalsIgnoreCase(g.source))return "android";
+        String provider=g.linkedProvider==null?"":g.linkedProvider.toLowerCase(Locale.ROOT);
+        if(!provider.isBlank())return provider;
+        String source=g.source==null?"":g.source.toLowerCase(Locale.ROOT);
+        if("steam-family".equals(source))return "steam";
+        if("eden".equals(source)||"emulator".equals(source))return "emulated";
+        return source;
+    }
+
+    private boolean rowMatchesLibrary(LudexDb.GameRow g,LibraryFilter filter){
+        if(filter==LibraryFilter.ALL)return true;
+        String source=sourceKey(g);
+        switch(filter){
+            case ANDROID:return "android".equals(source);
+            case STEAM:return g.steam||"steam".equals(source);
+            case NINTENDO:return g.nintendo||"nintendo".equals(source);
+            case EPIC:return "epic".equals(source);
+            case GOG:return "gog".equals(source);
+            case XBOX:return "xbox".equals(source)||"microsoft".equals(source);
+            case EMULATED:return g.emulated;
+            case OTHER:
+                return !g.steam&&!g.nintendo&&!g.emulated
+                    && !"android".equals(source)&&!"steam".equals(source)&&!"nintendo".equals(source)
+                    && !"epic".equals(source)&&!"gog".equals(source)&&!"xbox".equals(source)&&!"microsoft".equals(source);
+            default:return true;
+        }
+    }
+
+    private boolean groupMatchesLibrary(DisplayGame game,LibraryFilter filter){
+        if(filter==LibraryFilter.ALL)return game.seconds>0;
+        for(LudexDb.GameRow row:game.variants){
+            if(row.seconds>0&&rowMatchesLibrary(row,filter))return true;
+        }
+        return false;
+    }
+
+    private boolean groupMatchesTab(DisplayGame game,Tab mode){
+        if(mode!=Tab.LIBRARY&&mode!=Tab.ANDROID&&mode!=Tab.EMULATED)return true;
+        for(LudexDb.GameRow row:game.variants){
+            if(row.seconds<=0)continue;
+            if(mode==Tab.ANDROID&&"android".equalsIgnoreCase(row.source))return true;
+            if(mode==Tab.EMULATED&&row.emulated)return true;
+            if(mode==Tab.LIBRARY&&(!row.emulated||row.nintendo))return true;
+        }
+        return false;
+    }
+
+    private String rowLibraryLabel(LudexDb.GameRow row){
+        if(row.steam)return "Steam";
+        if(row.nintendo)return "Nintendo";
+        String source=sourceKey(row);
+        switch(source){
+            case "android":return "Android";
+            case "steam":return "Steam";
+            case "nintendo":return "Nintendo";
+            case "epic":return "Epic";
+            case "gog":return "GOG";
+            case "xbox":case "microsoft":return "Xbox";
+            case "emulated":return "Emulado";
+            default:return providerLabel(row.source);
+        }
+    }
+
+    private String librariesLabel(DisplayGame game){
+        LinkedHashSet<String> labels=new LinkedHashSet<>();
+        for(LudexDb.GameRow row:game.variants){
+            if(row.seconds>0)labels.add(rowLibraryLabel(row));
+        }
+        if(labels.isEmpty()&&game.primary!=null)labels.add(rowLibraryLabel(game.primary));
+        return String.join(" + ",labels);
+    }
+
+    private String playtimeBreakdown(DisplayGame game){
+        LinkedHashMap<String,Long> totals=new LinkedHashMap<>();
+        for(LudexDb.GameRow row:game.variants){
+            if(row.seconds<=0)continue;
+            String label=rowLibraryLabel(row);
+            totals.put(label,totals.getOrDefault(label,0L)+row.seconds);
+        }
+        StringBuilder out=new StringBuilder();
+        for(Map.Entry<String,Long> entry:totals.entrySet()){
+            if(out.length()>0)out.append("\n");
+            out.append(entry.getKey()).append(": ").append(format(entry.getValue()));
+        }
+        return out.toString();
+    }
+
+    private LudexDb.GameRow androidVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants){
+            if("android".equalsIgnoreCase(row.source)&&row.packageName!=null)return row;
+        }
+        return null;
+    }
+
+    private LudexDb.GameRow artworkVariant(DisplayGame game){
+        LudexDb.GameRow best=game.primary;
+        int bestScore=-1;
+        for(LudexDb.GameRow row:game.variants){
+            int score=0;
+            if("android".equalsIgnoreCase(row.source)&&row.packageName!=null)score+=500;
+            if(row.steam)score+=400;
+            if(row.nintendo)score+=300;
+            if(row.gameNative)score+=200;
+            if(row.emulated)score+=100;
+            if(row.installed)score+=50;
+            if(score>bestScore){best=row;bestScore=score;}
+        }
+        return best;
+    }
+
+    private LudexDb.GameRow launchVariant(DisplayGame game){
+        LudexDb.GameRow best=null;int bestScore=-1;
+        for(LudexDb.GameRow row:game.variants){
+            if(!isLaunchable(row))continue;
+            int score=10;
+            if(rowMatchesLibrary(row,libraryFilter))score+=200;
+            if(tab==Tab.ANDROID&&"android".equalsIgnoreCase(row.source))score+=150;
+            if(tab==Tab.EMULATED&&row.emulated)score+=150;
+            if("android".equalsIgnoreCase(row.source))score+=30;
+            if(score>bestScore){best=row;bestScore=score;}
+        }
+        return best;
+    }
+
+    private void showGame(DisplayGame game){
+        LudexDb.GameRow launch=launchVariant(game);
+        String breakdown=playtimeBreakdown(game);
+        String message=librariesLabel(game)+"\nTotal: "+format(game.seconds);
+        if(!breakdown.isBlank())message+="\n\n"+breakdown;
+        message+="\n\nStatus: "+game.status;
         new MaterialAlertDialogBuilder(this)
-            .setTitle(g.title)
-            .setMessage(g.platform+" · "+providerLabel(g.source)+"\n"+format(g.seconds)+" registrados\nStatus: "+g.status+
-                (g.packageName!=null?"\nApp: "+g.packageName:""))
-            .setNeutralButton(g.favorite?"Remover favorito":"Favoritar",(d,w)->{db.setFavorite(g.id,!g.favorite);refreshAsync(false);})
-            .setNegativeButton("Mais",(d,w)->showGameActions(g))
-            .setPositiveButton(g.installed&&(g.packageName!=null||g.gameNative||g.emulated)?"JOGAR":"Fechar",(d,w)->{if(g.installed&&(g.packageName!=null||g.gameNative||g.emulated))launchGame(g);})
+            .setTitle(game.title)
+            .setMessage(message)
+            .setNeutralButton(game.favorite?"Remover favorito":"Favoritar",(d,w)->{
+                for(LudexDb.GameRow row:game.variants)db.setFavorite(row.id,!game.favorite);
+                refreshAsync(false);
+            })
+            .setNegativeButton("Mais",(d,w)->showGameActions(game))
+            .setPositiveButton(launch!=null?"JOGAR":"Fechar",(d,w)->{if(launch!=null)launchGame(launch);})
             .show();
     }
 
-    private void showGameActions(LudexDb.GameRow g){
+    private void showGameActions(DisplayGame game){
         ArrayList<String> actions=new ArrayList<>();
         actions.add("Alterar status");
-        if("android".equals(g.source)&&g.packageName!=null)actions.add("Ajustar horas totais");
+        LudexDb.GameRow android=androidVariant(game);
+        if(android!=null)actions.add("Ajustar horas Android");
         actions.add("Excluir da lista");
-        new MaterialAlertDialogBuilder(this).setTitle(g.title).setItems(actions.toArray(new String[0]),(d,which)->{
+        new MaterialAlertDialogBuilder(this).setTitle(game.title).setItems(actions.toArray(new String[0]),(d,which)->{
             String action=actions.get(which);
-            if("Alterar status".equals(action))showStatusPicker(g);
-            else if("Ajustar horas totais".equals(action))calibratePlaytime(g);
-            else if("Excluir da lista".equals(action))confirmHideGame(g);
+            if("Alterar status".equals(action))showStatusPicker(game);
+            else if("Ajustar horas Android".equals(action)&&android!=null)calibratePlaytime(android);
+            else if("Excluir da lista".equals(action))confirmHideGame(game);
         }).show();
     }
 
-    private void confirmHideGame(LudexDb.GameRow g){
+    private void confirmHideGame(DisplayGame game){
         new MaterialAlertDialogBuilder(this)
-            .setTitle("Excluir "+g.title+" da lista?")
-            .setMessage("Isso só remove o jogo da biblioteca do Ludex. O app, ROM, save, horas e arquivos originais não serão apagados. Se ele for encontrado novamente em uma sincronização, continuará oculto.")
+            .setTitle("Excluir "+game.title+" da lista?")
+            .setMessage("Todas as cópias agrupadas serão ocultadas no Ludex. Apps, ROMs, saves, horas e arquivos originais não serão apagados.")
             .setNegativeButton("Cancelar",null)
             .setPositiveButton("Excluir",(d,w)->{
-                db.hideGame(g.id);
+                for(LudexDb.GameRow row:game.variants)db.hideGame(row.id);
                 refreshAsync(false);
-                Snackbar.make(findViewById(R.id.root),g.title+" removido da lista",Snackbar.LENGTH_LONG)
-                    .setAction("DESFAZER",v->{db.unhideGame(g.id);refreshAsync(false);})
+                Snackbar.make(findViewById(R.id.root),game.title+" removido da lista",Snackbar.LENGTH_LONG)
+                    .setAction("DESFAZER",v->{
+                        for(LudexDb.GameRow row:game.variants)db.unhideGame(row.id);
+                        refreshAsync(false);
+                    })
                     .show();
             }).show();
     }
 
-    private void showStatusPicker(LudexDb.GameRow g){
+    private void showStatusPicker(DisplayGame game){
         String[] statuses={"Quero jogar","Jogando","Pausado","Concluído","100%","Abandonado"};
         new MaterialAlertDialogBuilder(this).setTitle("Status").setItems(statuses,(d,which)->{
-            db.setStatus(g.id,statuses[which]);refreshAsync(false);
+            for(LudexDb.GameRow row:game.variants)db.setStatus(row.id,statuses[which]);
+            refreshAsync(false);
         }).show();
     }
 
@@ -1373,22 +1590,22 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     final class GameAdapter extends RecyclerView.Adapter<GameAdapter.Holder>{
-        interface GameClick{void click(LudexDb.GameRow g);}
-        private final ArrayList<LudexDb.GameRow> all=new ArrayList<>(),shown=new ArrayList<>();
+        interface GameClick{void click(DisplayGame g);}
+        private final ArrayList<DisplayGame> all=new ArrayList<>(),shown=new ArrayList<>();
         private final GameClick click,launch;
         GameAdapter(GameClick click,GameClick launch){this.click=click;this.launch=launch;}
-        void setAll(List<LudexDb.GameRow> x){all.clear();all.addAll(x);filter("",tab);}
+        void setAll(List<LudexDb.GameRow> x){all.clear();all.addAll(buildDisplayGames(x));filter("",tab);}
         void filter(String query,Tab mode){
             shown.clear();String q=query==null?"":query.trim().toLowerCase(Locale.ROOT);
-            for(LudexDb.GameRow g:all){
-                if(mode==Tab.ANDROID&&!"android".equals(g.source))continue;
-                if(mode==Tab.EMULATED&&!g.emulated)continue;
-                if(mode==Tab.LIBRARY&&g.emulated)continue;
-                if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q))continue;
+            for(DisplayGame g:all){
+                if(g.seconds<=0)continue;
+                if(!groupMatchesTab(g,mode))continue;
+                if(!groupMatchesLibrary(g,libraryFilter))continue;
+                if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q)&&!librariesLabel(g).toLowerCase(Locale.ROOT).contains(q))continue;
                 shown.add(g);
             }
             if(sortByPlaytime){
-                shown.sort(Comparator.comparingLong((LudexDb.GameRow g)->g.seconds).reversed()
+                shown.sort(Comparator.comparingLong((DisplayGame g)->g.seconds).reversed()
                     .thenComparing(g->g.title,String.CASE_INSENSITIVE_ORDER));
             }else{
                 shown.sort(Comparator.comparing(g->g.title,String.CASE_INSENSITIVE_ORDER));
@@ -1397,12 +1614,18 @@ public final class MainActivity extends AppCompatActivity {
         }
         @NonNull public Holder onCreateViewHolder(@NonNull android.view.ViewGroup p,int t){return new Holder(getLayoutInflater().inflate(R.layout.item_game,p,false));}
         public void onBindViewHolder(@NonNull Holder h,int pos){
-            LudexDb.GameRow g=shown.get(pos);
-            h.title.setText(g.title);h.meta.setText(g.platform+" · "+providerLabel(g.source)+(g.gameNative?" · GameNative":(g.eden?" · Eden":(g.installed?" · instalado":""))));
-            h.time.setText(format(g.seconds));h.status.setText(g.favorite?"★ "+g.status:g.status);
-            bindGameArtwork(g,h.icon);
-            h.play.setVisibility(g.installed&&(g.packageName!=null||g.gameNative||g.emulated)?View.VISIBLE:View.GONE);
-            h.itemView.setOnClickListener(v->click.click(g));h.play.setOnClickListener(v->launch.click(g));
+            DisplayGame g=shown.get(pos);
+            LudexDb.GameRow artwork=artworkVariant(g);
+            LudexDb.GameRow launchable=launchVariant(g);
+            h.title.setText(g.title);
+            h.meta.setText(librariesLabel(g)+(g.variants.size()>1?" · "+g.variants.size()+" fontes":""));
+            h.time.setText(format(g.seconds));
+            h.status.setText(g.favorite?"★ "+g.status:g.status);
+            if(artwork!=null)bindGameArtwork(artwork,h.icon);
+            else h.icon.setVisibility(View.INVISIBLE);
+            h.play.setVisibility(launchable!=null?View.VISIBLE:View.GONE);
+            h.itemView.setOnClickListener(v->click.click(g));
+            h.play.setOnClickListener(v->launch.click(g));
         }
         public int getItemCount(){return shown.size();}
         final class Holder extends RecyclerView.ViewHolder{
