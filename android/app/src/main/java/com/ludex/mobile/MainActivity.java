@@ -640,6 +640,7 @@ public final class MainActivity extends AppCompatActivity {
         if(g==null)return "";
         if(g.steam)return "steam";
         if(g.nintendo)return "nintendo";
+        if(g.epic)return "epic";
         if("android".equalsIgnoreCase(g.source))return "android";
         String provider=g.linkedProvider==null?"":g.linkedProvider.toLowerCase(Locale.ROOT);
         if(!provider.isBlank())return provider;
@@ -656,12 +657,12 @@ public final class MainActivity extends AppCompatActivity {
             case ANDROID:return "android".equals(source);
             case STEAM:return g.steam||"steam".equals(source);
             case NINTENDO:return g.nintendo||"nintendo".equals(source);
-            case EPIC:return "epic".equals(source);
+            case EPIC:return g.epic||"epic".equals(source);
             case GOG:return "gog".equals(source);
             case XBOX:return "xbox".equals(source)||"microsoft".equals(source);
             case EMULATED:return g.emulated;
             case OTHER:
-                return !g.steam&&!g.nintendo&&!g.emulated
+                return !g.steam&&!g.nintendo&&!g.epic&&!g.emulated
                     && !"android".equals(source)&&!"steam".equals(source)&&!"nintendo".equals(source)
                     && !"epic".equals(source)&&!"gog".equals(source)&&!"xbox".equals(source)&&!"microsoft".equals(source);
             default:return true;
@@ -675,7 +676,7 @@ public final class MainActivity extends AppCompatActivity {
             case STEAM:return row.steamSeconds>0;
             case NINTENDO:return row.nintendoSeconds>0;
             case EMULATED:return row.emulatedSeconds>0;
-            case EPIC:return row.otherSeconds>0&&"epic".equals(sourceKey(row));
+            case EPIC:return row.epicSeconds>0;
             case GOG:return row.otherSeconds>0&&"gog".equals(sourceKey(row));
             case XBOX:{
                 String source=sourceKey(row);
@@ -701,7 +702,7 @@ public final class MainActivity extends AppCompatActivity {
         for(LudexDb.GameRow row:game.variants){
             if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
             if(mode==Tab.EMULATED&&row.emulatedSeconds>0)return true;
-            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.otherSeconds>0))return true;
+            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.epicSeconds>0||row.otherSeconds>0))return true;
         }
         return false;
     }
@@ -728,6 +729,7 @@ public final class MainActivity extends AppCompatActivity {
             if(row.androidSeconds>0)labels.add("Android");
             if(row.steamSeconds>0)labels.add("Steam");
             if(row.nintendoSeconds>0)labels.add("Nintendo");
+            if(row.epicSeconds>0)labels.add("Epic");
             if(row.emulatedSeconds>0)labels.add("Emulado");
             if(row.otherSeconds>0)labels.add(rowLibraryLabel(row));
         }
@@ -746,6 +748,7 @@ public final class MainActivity extends AppCompatActivity {
             addPlaytime(totals,"Android",row.androidSeconds);
             addPlaytime(totals,"Steam",row.steamSeconds);
             addPlaytime(totals,"Nintendo",row.nintendoSeconds);
+            addPlaytime(totals,"Epic",row.epicSeconds);
             addPlaytime(totals,"Emulado",row.emulatedSeconds);
             addPlaytime(totals,rowLibraryLabel(row),row.otherSeconds);
         }
@@ -771,6 +774,7 @@ public final class MainActivity extends AppCompatActivity {
             int score=0;
             if("android".equalsIgnoreCase(row.source)&&row.packageName!=null)score+=500;
             if(row.steam)score+=400;
+            if(row.epic)score+=350;
             if(row.nintendo)score+=300;
             if(row.gameNative)score+=200;
             if(row.emulated)score+=100;
@@ -1558,6 +1562,15 @@ public final class MainActivity extends AppCompatActivity {
         if(steamInfo!=null&&!g.gameNative){
             io.execute(()->{
                 android.graphics.Bitmap bmp=GameArtworkLoader.load(this,"steam",steamInfo.appId);
+                if(bmp==null)return;
+                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
+            });
+            return;
+        }
+        LudexDb.EpicInfo epicInfo=db.getEpicInfo(g.id);
+        if(epicInfo!=null&&!epicInfo.imageUrl.isBlank()){
+            io.execute(()->{
+                android.graphics.Bitmap bmp=EpicArtworkLoader.load(this,epicInfo.appName,epicInfo.imageUrl);
                 if(bmp==null)return;
                 runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
             });
