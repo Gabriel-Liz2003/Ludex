@@ -154,6 +154,12 @@ public final class EpicLibraryClient {
 
                 for(RawItem item:chunk){
                     JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
+                    if(data==null){
+                        try{
+                            JSONObject single=fetchCatalog(credentials.accessToken,Collections.singletonList(item));
+                            data=single.optJSONObject(item.catalogItemId);
+                        }catch(Exception ignored){}
+                    }
                     if(data!=null&&data.has("mainGameItem"))continue;
 
                     String title=data==null?item.appName:data.optString("title",item.appName).trim();
