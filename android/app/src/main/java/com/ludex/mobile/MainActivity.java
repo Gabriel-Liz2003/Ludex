@@ -388,6 +388,13 @@ public final class MainActivity extends AppCompatActivity {
                     }catch(Exception e){failed.add("Steam");}
                 }
 
+                if(!SecretStore.get(this,"epic.refresh_token").isEmpty()){
+                    try{
+                        syncEpicLibraryNow();
+                        updated.add("Epic");
+                    }catch(Exception e){failed.add("Epic");}
+                }
+
                 if(Shizuku.pingBinder()){
                     int edenMatched=0;
                     edenMatched+=importEdenPlaytime(EdenShortcutScanner.STANDARD_PACKAGE);
