@@ -237,6 +237,21 @@ public final class LudexDb extends SQLiteOpenHelper {
                     }
                 }
 
+                if(gameId==null){
+                    String wanted=normalizeGameTitle(item.title);
+                    String candidate=null;int matches=0;
+                    try(Cursor cur=db.rawQuery(
+                        "SELECT game_id,title FROM gamenative_games WHERE lower(provider)='epic'",
+                        null)){
+                        while(cur.moveToNext()){
+                            if(normalizeGameTitle(cur.getString(1)).equals(wanted)){
+                                candidate=cur.getString(0);matches++;
+                            }
+                        }
+                    }
+                    if(matches==1)gameId=candidate;
+                }
+
                 boolean created=false;
                 if(gameId==null){
                     gameId="epic:"+item.appName;
