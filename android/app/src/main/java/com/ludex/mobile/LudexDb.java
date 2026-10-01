@@ -277,8 +277,23 @@ public final class LudexDb extends SQLiteOpenHelper {
                 }
 
                 // O item existe na conta, mas a metadata pode falhar temporariamente.
-                // Não crie hash como nome e não trate isso como remoção da biblioteca.
-                if(gameId==null&&displayTitle.isBlank())continue;
+                // Preserve nomes válidos anteriores; hashes antigos sem metadata devem sumir da UI.
+                if(displayTitle.isBlank()){
+                    if(gameId!=null){
+                        db.delete("epic_games","game_id=?",new String[]{gameId});
+                        db.delete("imported_playtime","game_id=? AND lower(provider) LIKE 'epic%'",new String[]{gameId});
+                        db.execSQL(
+                            "DELETE FROM games WHERE id=? AND source='epic' "+
+                            "AND NOT EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=games.id) "+
+                            "AND NOT EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=games.id) "+
+                            "AND NOT EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=games.id) "+
+                            "AND NOT EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=games.id) "+
+                            "AND NOT EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=games.id)",
+                            new Object[]{gameId}
+                        );
+                    }
+                    continue;
+                }
 
                 boolean created=false;
                 if(gameId==null){
