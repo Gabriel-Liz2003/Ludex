@@ -1387,20 +1387,28 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private static final class EpicSyncResult{
-        final int total,played;
-        EpicSyncResult(int total,int played){this.total=total;this.played=played;}
+        final int total,played,unresolvedPlayed;
+        EpicSyncResult(int total,int played,int unresolvedPlayed){
+            this.total=total;this.played=played;this.unresolvedPlayed=unresolvedPlayed;
+        }
     }
 
     private EpicSyncResult syncEpicLibraryNow() throws Exception {
         EpicLibraryClient.Credentials credentials=validEpicCredentials();
         List<EpicLibraryClient.LibraryGame> library=EpicLibraryClient.getOwnedLibrary(credentials);
-        int played=0;
-        for(EpicLibraryClient.LibraryGame game:library)if(game.seconds>0)played++;
+        int played=0,unresolvedPlayed=0;
+        for(EpicLibraryClient.LibraryGame game:library){
+            if(game.seconds>0){
+                played++;
+                if(!EpicLibraryClient.isReadableTitle(game.title))unresolvedPlayed++;
+            }
+        }
         db.syncEpicLibrary(library);
         db.setSetting("epic.last_sync_ms",Long.toString(System.currentTimeMillis()));
         db.setSetting("epic.last_library_count",Integer.toString(library.size()));
         db.setSetting("epic.last_played_count",Integer.toString(played));
-        return new EpicSyncResult(library.size(),played);
+        db.setSetting("epic.last_unresolved_played_count",Integer.toString(unresolvedPlayed));
+        return new EpicSyncResult(library.size(),played,unresolvedPlayed);
     }
 
     private void syncEpicLibrary(boolean notify){
@@ -1414,7 +1422,11 @@ public final class MainActivity extends AppCompatActivity {
                 EpicSyncResult result=syncEpicLibraryNow();
                 runOnUiThread(()->{
                     updateEpicSyncInfo();
-                    if(notify)toast(result.total+" jogos Epic sincronizados · "+result.played+" com horas");
+                    if(notify){
+                        String msg=result.total+" jogos Epic sincronizados · "+result.played+" com horas";
+                        if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" sem título resolvido";
+                        toast(msg);
+                    }
                     refreshAsync(false);
                 });
             }catch(Exception e){
