@@ -54,7 +54,7 @@ public final class MainActivity extends AppCompatActivity {
         final String key;
         final ArrayList<LudexDb.GameRow> variants=new ArrayList<>();
         String title="",status="Quero jogar";
-        long seconds;
+        long seconds,firstActivityAt,acquiredAt,firstSeenAt;
         boolean favorite;
         LudexDb.GameRow primary;
 
@@ -634,6 +634,9 @@ public final class MainActivity extends AppCompatActivity {
             game.variants.add(row);
             game.seconds+=Math.max(0,row.seconds);
             game.favorite|=row.favorite;
+            game.firstActivityAt=minPositiveTime(game.firstActivityAt,row.firstActivityAt);
+            game.acquiredAt=minPositiveTime(game.acquiredAt,row.acquiredAt);
+            game.firstSeenAt=minPositiveTime(game.firstSeenAt,row.firstSeenAt);
             if(game.title.isEmpty()||titleQuality(row.title)>titleQuality(game.title))game.title=row.title;
             if(game.primary==null||primaryScore(row)>primaryScore(game.primary))game.primary=row;
         }
@@ -641,6 +644,24 @@ public final class MainActivity extends AppCompatActivity {
             if(game.primary!=null)game.status=game.primary.status;
         }
         return new ArrayList<>(grouped.values());
+    }
+
+    private static long minPositiveTime(long a,long b){
+        if(a<=0)return Math.max(0,b);
+        if(b<=0)return a;
+        return Math.min(a,b);
+    }
+
+    private static String formatDate(long atMs){
+        if(atMs<=0)return "";
+        return new java.text.SimpleDateFormat("dd/MM/yyyy",Locale.getDefault()).format(new java.util.Date(atMs));
+    }
+
+    private static String gameDateLabel(DisplayGame game){
+        if(game.firstActivityAt>0)return "1ª atividade: "+formatDate(game.firstActivityAt);
+        if(game.acquiredAt>0)return "Na biblioteca desde: "+formatDate(game.acquiredAt);
+        if(game.firstSeenAt>0)return "No Ludex desde: "+formatDate(game.firstSeenAt);
+        return "";
     }
 
     private static String sourceKey(LudexDb.GameRow g){
@@ -809,6 +830,8 @@ public final class MainActivity extends AppCompatActivity {
         LudexDb.GameRow launch=launchVariant(game);
         String breakdown=playtimeBreakdown(game);
         String message=librariesLabel(game)+"\nTotal: "+format(game.seconds);
+        String date=gameDateLabel(game);
+        if(!date.isBlank())message+="\n"+date;
         if(!breakdown.isBlank())message+="\n\n"+breakdown;
         message+="\n\nStatus: "+game.status;
         new MaterialAlertDialogBuilder(this)
@@ -889,6 +912,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void launchGame(LudexDb.GameRow g){
+        db.markGameOpened(g.id,System.currentTimeMillis());
         if(g.gameNative){
             LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
             if(launch!=null){
@@ -1845,6 +1869,9 @@ public final class MainActivity extends AppCompatActivity {
             LudexDb.GameRow launchable=launchVariant(g);
             h.title.setText(g.title);
             h.meta.setText(librariesLabel(g)+(g.variants.size()>1?" · "+g.variants.size()+" fontes":""));
+            String date=gameDateLabel(g);
+            h.date.setText(date);
+            h.date.setVisibility(date.isBlank()?View.GONE:View.VISIBLE);
             h.time.setText(format(g.seconds));
             h.status.setText(g.favorite?"★ "+g.status:g.status);
             if(artwork!=null)bindGameArtwork(artwork,h.icon);
@@ -1855,8 +1882,8 @@ public final class MainActivity extends AppCompatActivity {
         }
         public int getItemCount(){return shown.size();}
         final class Holder extends RecyclerView.ViewHolder{
-            TextView title,meta,time,status;ImageView icon;Button play;
-            Holder(View v){super(v);title=v.findViewById(R.id.game_title);meta=v.findViewById(R.id.game_meta);time=v.findViewById(R.id.game_time);status=v.findViewById(R.id.game_status);icon=v.findViewById(R.id.game_icon);play=v.findViewById(R.id.game_play);}
+            TextView title,meta,date,time,status;ImageView icon;Button play;
+            Holder(View v){super(v);title=v.findViewById(R.id.game_title);meta=v.findViewById(R.id.game_meta);date=v.findViewById(R.id.game_date);time=v.findViewById(R.id.game_time);status=v.findViewById(R.id.game_status);icon=v.findViewById(R.id.game_icon);play=v.findViewById(R.id.game_play);}
         }
     }
 
