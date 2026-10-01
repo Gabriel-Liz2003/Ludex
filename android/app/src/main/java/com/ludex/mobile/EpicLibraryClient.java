@@ -33,27 +33,30 @@ public final class EpicLibraryClient {
 
     public static final class LibraryGame {
         public final String appName,namespace,catalogItemId,title,imageUrl;
-        public final long seconds;
+        public final long seconds,acquiredAtMs;
 
-        LibraryGame(String appName,String namespace,String catalogItemId,String title,String imageUrl,long seconds){
+        LibraryGame(String appName,String namespace,String catalogItemId,String title,String imageUrl,long seconds,long acquiredAtMs){
             this.appName=appName;
             this.namespace=namespace;
             this.catalogItemId=catalogItemId;
-            this.title=title;
+            this.title=title==null?"":title.trim();
             this.imageUrl=imageUrl==null?"":imageUrl;
             this.seconds=Math.max(0,seconds);
+            this.acquiredAtMs=Math.max(0,acquiredAtMs);
         }
     }
 
     private static final class RawItem {
         final String appName,namespace,catalogItemId,country,title,imageUrl;
-        RawItem(String appName,String namespace,String catalogItemId,String country,String title,String imageUrl){
+        final long acquiredAtMs;
+        RawItem(String appName,String namespace,String catalogItemId,String country,String title,String imageUrl,long acquiredAtMs){
             this.appName=appName;
             this.namespace=namespace;
             this.catalogItemId=catalogItemId;
             this.country=country;
             this.title=title==null?"":title.trim();
             this.imageUrl=imageUrl==null?"":imageUrl.trim();
+            this.acquiredAtMs=Math.max(0,acquiredAtMs);
         }
     }
 
@@ -159,8 +162,8 @@ public final class EpicLibraryClient {
         List<RawItem> raw=fetchLibrary(credentials.accessToken);
         Map<String,Long> playtime=fetchPlaytime(credentials.accessToken,credentials.accountId);
 
-        // A Library Service já devolve título/metadados para a maioria dos itens.
         // Só consulte o catálogo para registros JOGADOS que ainda estejam sem nome legível.
+        // O item continua no snapshot mesmo se a metadata falhar, para não ser tratado como removido da conta.
         LinkedHashMap<String,List<RawItem>> unresolvedByNamespace=new LinkedHashMap<>();
         for(RawItem item:raw){
             long seconds=playtime.getOrDefault(item.appName,0L);
@@ -172,13 +175,23 @@ public final class EpicLibraryClient {
         for(List<RawItem> group:unresolvedByNamespace.values()){
             for(int start=0;start<group.size();start+=50){
                 List<RawItem> chunk=group.subList(start,Math.min(start+50,group.size()));
-                try{
-                    JSONObject catalog=fetchCatalog(credentials.accessToken,chunk);
-                    for(RawItem item:chunk){
-                        JSONObject data=catalog.optJSONObject(item.catalogItemId);
-                        if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
-                    }
-                }catch(Exception ignored){}
+                JSONObject catalog=null;
+                try{catalog=fetchCatalog(credentials.accessToken,chunk,"BR","pt-BR");}catch(Exception ignored){}
+                ArrayList<RawItem> missing=new ArrayList<>();
+                for(RawItem item:chunk){
+                    JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
+                    if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                    else missing.add(item);
+                }
+                if(!missing.isEmpty()){
+                    try{
+                        JSONObject fallback=fetchCatalog(credentials.accessToken,missing,"US","en");
+                        for(RawItem item:missing){
+                            JSONObject data=fallback.optJSONObject(item.catalogItemId);
+                            if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                        }
+                    }catch(Exception ignored){}
+                }
             }
         }
 
@@ -192,17 +205,13 @@ public final class EpicLibraryClient {
             String title=item.title;
             if(!isReadableTitle(title)&&data!=null)title=data.optString("title","").trim();
 
-            // Nunca use appName/artifactId como título. Esses IDs eram os hexadecimais
-            // que apareciam como jogos na biblioteca e inflavam o resumo.
-            if(!isReadableTitle(title)){
-                // Itens não jogados podem ser mantidos fora do catálogo sem custo;
-                // itens jogados sem metadata confiável também são descartados da UI.
-                continue;
-            }
+            // Nunca use appName/artifactId como título. Se não houver metadata,
+            // mantenha o item no snapshot com título vazio; o banco preservará um nome válido anterior.
+            if(!isReadableTitle(title))title="";
 
             String image=item.imageUrl;
             if(image.isBlank()&&data!=null)image=bestImage(data.optJSONArray("keyImages"));
-            out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds));
+            out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds,item.acquiredAtMs));
         }
 
         LinkedHashMap<String,LibraryGame> unique=new LinkedHashMap<>();
@@ -217,7 +226,7 @@ public final class EpicLibraryClient {
 
         do{
             StringBuilder url=new StringBuilder(LIBRARY_URL)
-                .append("?includeMetadata=true&platform=Windows&excludeNs=ue&limit=200");
+                .append("?includeMetadata=true&excludeNs=ue&limit=200");
             if(cursor!=null&&!cursor.isBlank())url.append("&cursor=").append(enc(cursor));
             JSONObject json=new JSONObject(request("GET",url.toString(),"Bearer "+accessToken,null,null));
             JSONArray records=json.optJSONArray("records");
@@ -226,8 +235,8 @@ public final class EpicLibraryClient {
                     JSONObject record=records.optJSONObject(i);
                     if(record==null)continue;
 
-                    String recordType=record.optString("recordType","APPLICATION");
-                    if(!recordType.isBlank()&&!"APPLICATION".equalsIgnoreCase(recordType))continue;
+                    String recordType=record.optString("recordType","");
+                    if("SUBSCRIPTION".equalsIgnoreCase(recordType))continue;
 
                     String appName=record.optString("appName","").trim();
                     String namespace=record.optString("namespace","").trim();
@@ -236,6 +245,16 @@ public final class EpicLibraryClient {
                     if(appName.isEmpty()||namespace.isEmpty()||catalog.isEmpty())continue;
                     if("ue".equalsIgnoreCase(namespace)||"89efe5924d3d467c839449ab6ab52e7f".equalsIgnoreCase(namespace))continue;
                     if("PRIVATE".equalsIgnoreCase(sandbox)||"1".equals(appName))continue;
+
+                    JSONArray platforms=record.optJSONArray("platform");
+                    if(platforms!=null&&platforms.length()>0){
+                        boolean windows=false;
+                        for(int j=0;j<platforms.length();j++){
+                            String platform=platforms.optString(j,"");
+                            if("Windows".equalsIgnoreCase(platform)||"Win32".equalsIgnoreCase(platform)){windows=true;break;}
+                        }
+                        if(!windows)continue;
+                    }
 
                     JSONObject metadata=record.optJSONObject("metadata");
                     String title=firstNonBlank(
@@ -254,7 +273,8 @@ public final class EpicLibraryClient {
                         catalog,
                         record.optString("country","BR"),
                         title,
-                        image
+                        image,
+                        parseApiDate(record.optString("acquisitionDate",""))
                     ));
                 }
             }
@@ -282,10 +302,9 @@ public final class EpicLibraryClient {
         return out;
     }
 
-    private static JSONObject fetchCatalog(String accessToken,List<RawItem> items) throws Exception {
+    private static JSONObject fetchCatalog(String accessToken,List<RawItem> items,String country,String locale) throws Exception {
         if(items==null||items.isEmpty())return new JSONObject();
         RawItem first=items.get(0);
-        String country=first.country==null||first.country.isBlank()?"BR":first.country;
         ArrayList<String> ids=new ArrayList<>();
         for(RawItem item:items){
             if(first.namespace.equals(item.namespace)&&!item.catalogItemId.isBlank())ids.add(item.catalogItemId);
@@ -293,11 +312,12 @@ public final class EpicLibraryClient {
         String joined=String.join(",",ids);
         String url=CATALOG_URL+'/'+encPath(first.namespace)+"/bulk/items?id="+enc(joined)+
             "&includeDLCDetails=true&includeMainGameDetails=true"+
-            "&country="+enc(country)+"&locale=pt-BR";
+            "&country="+enc(country==null||country.isBlank()?"BR":country)+
+            "&locale="+enc(locale==null||locale.isBlank()?"pt-BR":locale);
         return new JSONObject(request("GET",url,"Bearer "+accessToken,null,null));
     }
 
-    private static boolean isReadableTitle(String title){
+    static boolean isReadableTitle(String title){
         if(title==null)return false;
         String value=title.trim();
         if(value.length()<2)return false;
@@ -359,6 +379,12 @@ public final class EpicLibraryClient {
             }
         }
         return fallback;
+    }
+
+    private static long parseApiDate(String raw){
+        if(raw==null||raw.isBlank())return 0;
+        try{return Instant.parse(raw.trim()).toEpochMilli();}
+        catch(Exception ignored){return 0;}
     }
 
     private static long parseExpiry(JSONObject json){
