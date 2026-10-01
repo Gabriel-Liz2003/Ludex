@@ -177,13 +177,20 @@ public final class EpicLibraryClient {
                 List<RawItem> chunk=group.subList(start,Math.min(start+50,group.size()));
                 JSONObject catalog=null;
                 try{catalog=fetchCatalog(credentials.accessToken,chunk,"BR","pt-BR");}catch(Exception ignored){}
-                if(catalog==null||catalog.length()==0){
-                    try{catalog=fetchCatalog(credentials.accessToken,chunk,"US","en");}catch(Exception ignored){}
-                }
-                if(catalog==null)continue;
+                ArrayList<RawItem> missing=new ArrayList<>();
                 for(RawItem item:chunk){
-                    JSONObject data=catalog.optJSONObject(item.catalogItemId);
+                    JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
                     if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                    else missing.add(item);
+                }
+                if(!missing.isEmpty()){
+                    try{
+                        JSONObject fallback=fetchCatalog(credentials.accessToken,missing,"US","en");
+                        for(RawItem item:missing){
+                            JSONObject data=fallback.optJSONObject(item.catalogItemId);
+                            if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                        }
+                    }catch(Exception ignored){}
                 }
             }
         }
