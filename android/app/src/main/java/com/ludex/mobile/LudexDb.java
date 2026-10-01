@@ -49,7 +49,7 @@ public final class LudexDb extends SQLiteOpenHelper {
 
     public LudexDb(Context c){super(c,"ludex-mobile.db",null,14);}
     @Override public void onCreate(SQLiteDatabase db){
-        db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
         db.execSQL("CREATE INDEX idx_sessions_game ON play_sessions(game_id,started_at)");
         db.execSQL("CREATE TABLE imported_playtime(game_id TEXT NOT NULL,provider TEXT NOT NULL,seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(game_id,provider))");
@@ -82,6 +82,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         if(oldV<13)db.execSQL("CREATE TABLE IF NOT EXISTS epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         if(oldV<14){
             try{db.execSQL("ALTER TABLE games ADD COLUMN first_seen_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
+            try{db.execSQL("ALTER TABLE games ADD COLUMN first_opened_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
             try{db.execSQL("ALTER TABLE epic_games ADD COLUMN acquisition_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
             db.execSQL("UPDATE games SET first_seen_at=CASE WHEN updated_at>0 THEN updated_at ELSE strftime('%s','now')*1000 END WHERE first_seen_at=0");
         }
@@ -121,7 +122,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
             "CASE WHEN lower(g.source)='epic' OR EXISTS(SELECT 1 FROM epic_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='epic') THEN 1 ELSE 0 END,"+
             "COALESCE((SELECT lower(gn.provider) FROM gamenative_games gn WHERE gn.game_id=g.id LIMIT 1),''),"+
-            "g.first_seen_at,"+
+            "g.first_seen_at,g.first_opened_at,"+
             "COALESCE((SELECT MIN(started_at) FROM play_sessions ps WHERE ps.game_id=g.id),0),"+
             "COALESCE((SELECT first_played_at FROM nintendo_games ng WHERE ng.game_id=g.id LIMIT 1),''),"+
             "COALESCE((SELECT acquisition_at FROM epic_games eg WHERE eg.game_id=g.id LIMIT 1),0) "+
@@ -142,10 +143,11 @@ public final class LudexDb extends SQLiteOpenHelper {
                 g.gameNative=c.getInt(21)!=0;g.eden=c.getInt(22)!=0;g.emulated=g.eden||c.getInt(23)!=0;
                 g.steam=c.getInt(24)!=0;g.nintendo=c.getInt(25)!=0;g.epic=c.getInt(26)!=0;g.linkedProvider=c.getString(27);
                 g.firstSeenAt=Math.max(0,c.getLong(28));
-                long sessionFirst=Math.max(0,c.getLong(29));
-                long nintendoFirst=parseIsoMillis(c.getString(30));
-                g.firstActivityAt=minPositive(sessionFirst,nintendoFirst);
-                g.acquiredAt=Math.max(0,c.getLong(31));
+                long firstOpened=Math.max(0,c.getLong(29));
+                long sessionFirst=Math.max(0,c.getLong(30));
+                long nintendoFirst=parseIsoMillis(c.getString(31));
+                g.firstActivityAt=minPositive(firstOpened,minPositive(sessionFirst,nintendoFirst));
+                g.acquiredAt=Math.max(0,c.getLong(32));
                 out.add(g);
             }
         }
@@ -579,6 +581,14 @@ public final class LudexDb extends SQLiteOpenHelper {
         catch(Exception ignored){return 0;}
     }
 
+    public void markGameOpened(String gameId,long atMs){
+        if(gameId==null||gameId.isBlank()||atMs<=0)return;
+        getWritableDatabase().execSQL(
+            "UPDATE games SET first_opened_at=CASE WHEN first_opened_at=0 OR first_opened_at>? THEN ? ELSE first_opened_at END WHERE id=?",
+            new Object[]{atMs,atMs,gameId}
+        );
+    }
+
     public void setImportedPlaytime(String game,String provider,long seconds){
         ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",System.currentTimeMillis());
         getWritableDatabase().insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);
@@ -611,7 +621,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         return root;
     }
     private JSONArray gamesJson() throws JSONException {
-        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,title,platform,source,package_name,installed,favorite,status,first_seen_at,updated_at FROM games",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("title",c.getString(1));o.put("platform",c.getString(2));o.put("source",c.getString(3));if(!c.isNull(4))o.put("package_name",c.getString(4));o.put("installed",c.getInt(5));o.put("favorite",c.getInt(6));o.put("status",c.getString(7));o.put("first_seen_at_ms",c.getLong(8));o.put("updated_at_ms",c.getLong(9));a.put(o);}}return a;
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,title,platform,source,package_name,installed,favorite,status,first_seen_at,first_opened_at,updated_at FROM games",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("title",c.getString(1));o.put("platform",c.getString(2));o.put("source",c.getString(3));if(!c.isNull(4))o.put("package_name",c.getString(4));o.put("installed",c.getInt(5));o.put("favorite",c.getInt(6));o.put("status",c.getString(7));o.put("first_seen_at_ms",c.getLong(8));o.put("first_opened_at_ms",c.getLong(9));o.put("updated_at_ms",c.getLong(10));a.put(o);}}return a;
     }
     private JSONArray sessionsJson() throws JSONException {
         JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,game_id,package_name,started_at,ended_at,duration_seconds,device,provider FROM play_sessions",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("game_id",c.getString(1));if(!c.isNull(2))o.put("package_name",c.getString(2));o.put("started_at_ms",c.getLong(3));o.put("ended_at_ms",c.getLong(4));o.put("duration_seconds",c.getLong(5));o.put("device",c.getString(6));o.put("provider",c.getString(7));a.put(o);}}return a;
@@ -642,7 +652,8 @@ public final class LudexDb extends SQLiteOpenHelper {
         ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("platform",g.optString("platform","PC"));v.put("source",g.optString("source","sync"));
         if(g.has("package_name")&&!g.isNull("package_name"))v.put("package_name",g.optString("package_name"));
         long firstSeen=parseTime(g,"first_seen_at","first_seen_at_ms");
-        v.put("installed",g.optInt("installed",0));v.put("favorite",g.optInt("favorite",0));v.put("status",g.optString("status","Quero jogar"));v.put("first_seen_at",firstSeen>0?firstSeen:(remote>0?remote:System.currentTimeMillis()));v.put("updated_at",remote>0?remote:System.currentTimeMillis());
+        long firstOpened=parseTime(g,"first_opened_at","first_opened_at_ms");
+        v.put("installed",g.optInt("installed",0));v.put("favorite",g.optInt("favorite",0));v.put("status",g.optString("status","Quero jogar"));v.put("first_seen_at",firstSeen>0?firstSeen:(remote>0?remote:System.currentTimeMillis()));v.put("first_opened_at",Math.max(0,firstOpened));v.put("updated_at",remote>0?remote:System.currentTimeMillis());
         if(local<0){db.insertWithOnConflict("games",null,v,SQLiteDatabase.CONFLICT_IGNORE);result.inserted++;}
         else{v.remove("id");db.update("games",v,"id=?",new String[]{id});result.updated++;}
     }
