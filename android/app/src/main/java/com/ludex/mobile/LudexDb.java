@@ -647,13 +647,20 @@ public final class LudexDb extends SQLiteOpenHelper {
     private void importGame(SQLiteDatabase db,JSONObject g,SyncResult result){
         String id=g.optString("id"),title=g.optString("title");if(id.isEmpty()||title.isEmpty()){result.skipped++;return;}
         long remote=parseTime(g,"updated_at","updated_at_ms");
-        long local=-1;try(Cursor c=db.rawQuery("SELECT updated_at FROM games WHERE id=?",new String[]{id})){if(c.moveToFirst())local=c.getLong(0);}
+        long local=-1,localFirstSeen=0,localFirstOpened=0;
+        try(Cursor c=db.rawQuery("SELECT updated_at,first_seen_at,first_opened_at FROM games WHERE id=?",new String[]{id})){
+            if(c.moveToFirst()){local=c.getLong(0);localFirstSeen=c.getLong(1);localFirstOpened=c.getLong(2);}
+        }
         if(local>=0&&remote>0&&remote<=local){result.skipped++;return;}
         ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("platform",g.optString("platform","PC"));v.put("source",g.optString("source","sync"));
         if(g.has("package_name")&&!g.isNull("package_name"))v.put("package_name",g.optString("package_name"));
         long firstSeen=parseTime(g,"first_seen_at","first_seen_at_ms");
         long firstOpened=parseTime(g,"first_opened_at","first_opened_at_ms");
-        v.put("installed",g.optInt("installed",0));v.put("favorite",g.optInt("favorite",0));v.put("status",g.optString("status","Quero jogar"));v.put("first_seen_at",firstSeen>0?firstSeen:(remote>0?remote:System.currentTimeMillis()));v.put("first_opened_at",Math.max(0,firstOpened));v.put("updated_at",remote>0?remote:System.currentTimeMillis());
+        long fallbackSeen=remote>0?remote:System.currentTimeMillis();
+        v.put("installed",g.optInt("installed",0));v.put("favorite",g.optInt("favorite",0));v.put("status",g.optString("status","Quero jogar"));
+        v.put("first_seen_at",local<0?(firstSeen>0?firstSeen:fallbackSeen):minPositive(localFirstSeen,firstSeen>0?firstSeen:fallbackSeen));
+        v.put("first_opened_at",local<0?Math.max(0,firstOpened):minPositive(localFirstOpened,firstOpened));
+        v.put("updated_at",remote>0?remote:System.currentTimeMillis());
         if(local<0){db.insertWithOnConflict("games",null,v,SQLiteDatabase.CONFLICT_IGNORE);result.inserted++;}
         else{v.remove("id");db.update("games",v,"id=?",new String[]{id});result.updated++;}
     }
