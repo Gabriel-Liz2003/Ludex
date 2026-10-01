@@ -177,20 +177,45 @@ public final class EpicLibraryClient {
                 List<RawItem> chunk=group.subList(start,Math.min(start+50,group.size()));
                 JSONObject catalog=null;
                 try{catalog=fetchCatalog(credentials.accessToken,chunk,"BR","pt-BR");}catch(Exception ignored){}
+
                 ArrayList<RawItem> missing=new ArrayList<>();
                 for(RawItem item:chunk){
                     JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
                     if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
                     else missing.add(item);
                 }
+
                 if(!missing.isEmpty()){
                     try{
-                        JSONObject fallback=fetchCatalog(credentials.accessToken,missing,"US","en");
+                        JSONObject fallback=fetchCatalog(credentials.accessToken,missing,"US","en-US");
+                        ArrayList<RawItem> stillMissing=new ArrayList<>();
                         for(RawItem item:missing){
                             JSONObject data=fallback.optJSONObject(item.catalogItemId);
                             if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                            else stillMissing.add(item);
                         }
-                    }catch(Exception ignored){}
+
+                        // Último fallback: só os itens JOGADOS que ainda não resolveram.
+                        // Isso cobre jogos como Genshin/Cyberpunk sem voltar ao custo de
+                        // uma requisição individual para centenas de itens da biblioteca.
+                        for(RawItem item:stillMissing){
+                            if(playtime.getOrDefault(item.appName,0L)<=0)continue;
+                            try{
+                                JSONObject single=fetchCatalog(credentials.accessToken,Collections.singletonList(item),"US","en-US");
+                                JSONObject data=single.optJSONObject(item.catalogItemId);
+                                if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                            }catch(Exception ignored){}
+                        }
+                    }catch(Exception ignored){
+                        for(RawItem item:missing){
+                            if(playtime.getOrDefault(item.appName,0L)<=0)continue;
+                            try{
+                                JSONObject single=fetchCatalog(credentials.accessToken,Collections.singletonList(item),"US","en-US");
+                                JSONObject data=single.optJSONObject(item.catalogItemId);
+                                if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
+                            }catch(Exception ignored2){}
+                        }
+                    }
                 }
             }
         }
@@ -305,16 +330,25 @@ public final class EpicLibraryClient {
     private static JSONObject fetchCatalog(String accessToken,List<RawItem> items,String country,String locale) throws Exception {
         if(items==null||items.isEmpty())return new JSONObject();
         RawItem first=items.get(0);
-        ArrayList<String> ids=new ArrayList<>();
+
+        StringBuilder url=new StringBuilder(CATALOG_URL)
+            .append('/').append(encPath(first.namespace))
+            .append("/bulk/items?");
+
+        boolean hasId=false;
         for(RawItem item:items){
-            if(first.namespace.equals(item.namespace)&&!item.catalogItemId.isBlank())ids.add(item.catalogItemId);
+            if(!first.namespace.equals(item.namespace)||item.catalogItemId.isBlank())continue;
+            if(hasId)url.append('&');
+            url.append("id=").append(enc(item.catalogItemId));
+            hasId=true;
         }
-        String joined=String.join(",",ids);
-        String url=CATALOG_URL+'/'+encPath(first.namespace)+"/bulk/items?id="+enc(joined)+
-            "&includeDLCDetails=true&includeMainGameDetails=true"+
-            "&country="+enc(country==null||country.isBlank()?"BR":country)+
-            "&locale="+enc(locale==null||locale.isBlank()?"pt-BR":locale);
-        return new JSONObject(request("GET",url,"Bearer "+accessToken,null,null));
+        if(!hasId)return new JSONObject();
+
+        url.append("&includeDLCDetails=true&includeMainGameDetails=true")
+            .append("&country=").append(enc(country==null||country.isBlank()?"BR":country))
+            .append("&locale=").append(enc(locale==null||locale.isBlank()?"pt-BR":locale));
+
+        return new JSONObject(request("GET",url.toString(),"Bearer "+accessToken,null,null));
     }
 
     static boolean isReadableTitle(String title){
