@@ -1387,20 +1387,21 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private static final class EpicSyncResult{
-        final int total,played,unresolvedPlayed;
-        EpicSyncResult(int total,int played,int unresolvedPlayed){
-            this.total=total;this.played=played;this.unresolvedPlayed=unresolvedPlayed;
+        final int total,played,unresolvedPlayed,recoveredFromLauncher;
+        EpicSyncResult(int total,int played,int unresolvedPlayed,int recoveredFromLauncher){
+            this.total=total;this.played=played;this.unresolvedPlayed=unresolvedPlayed;this.recoveredFromLauncher=recoveredFromLauncher;
         }
     }
 
     private EpicSyncResult syncEpicLibraryNow() throws Exception {
         EpicLibraryClient.Credentials credentials=validEpicCredentials();
         List<EpicLibraryClient.LibraryGame> library=EpicLibraryClient.getOwnedLibrary(credentials);
-        int played=0,unresolvedPlayed=0;
+        int played=0,unresolvedPlayed=0,recoveredFromLauncher=0;
         for(EpicLibraryClient.LibraryGame game:library){
             if(game.seconds>0){
                 played++;
                 if(!EpicLibraryClient.isReadableTitle(game.title))unresolvedPlayed++;
+                if(game.launcherFallback&&EpicLibraryClient.isReadableTitle(game.title))recoveredFromLauncher++;
             }
         }
         db.syncEpicLibrary(library);
@@ -1408,7 +1409,8 @@ public final class MainActivity extends AppCompatActivity {
         db.setSetting("epic.last_library_count",Integer.toString(library.size()));
         db.setSetting("epic.last_played_count",Integer.toString(played));
         db.setSetting("epic.last_unresolved_played_count",Integer.toString(unresolvedPlayed));
-        return new EpicSyncResult(library.size(),played,unresolvedPlayed);
+        db.setSetting("epic.last_launcher_recovered_count",Integer.toString(recoveredFromLauncher));
+        return new EpicSyncResult(library.size(),played,unresolvedPlayed,recoveredFromLauncher);
     }
 
     private void syncEpicLibrary(boolean notify){
@@ -1424,6 +1426,7 @@ public final class MainActivity extends AppCompatActivity {
                     updateEpicSyncInfo();
                     if(notify){
                         String msg=result.total+" jogos Epic sincronizados · "+result.played+" com horas";
+                        if(result.recoveredFromLauncher>0)msg+=" · "+result.recoveredFromLauncher+" recuperados via Launcher";
                         if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" sem título resolvido";
                         toast(msg);
                     }
