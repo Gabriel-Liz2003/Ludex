@@ -807,6 +807,11 @@ public final class MainActivity extends AppCompatActivity {
         if(!provider.isBlank())return provider;
         String source=g.source==null?"":g.source.toLowerCase(Locale.ROOT);
         if("steam-family".equals(source))return "steam";
+        if(source.startsWith("nintendo-"))return "nintendo";
+        if(source.startsWith("xbox-"))return "xbox";
+        if(source.startsWith("playstation-"))return "playstation";
+        if(source.startsWith("pc-"))return "pc";
+        if(source.startsWith("other-"))return "other";
         if("eden".equals(source)||"emulator".equals(source))return "emulated";
         return source;
     }
@@ -879,6 +884,9 @@ public final class MainActivity extends AppCompatActivity {
             case "epic":return "Epic";
             case "gog":return "GOG";
             case "xbox":case "microsoft":return "Xbox";
+            case "playstation":return "PlayStation";
+            case "pc":return "PC";
+            case "other":return "Manual";
             case "emulated":return "Emulado";
             default:return providerLabel(row.source);
         }
@@ -928,12 +936,21 @@ public final class MainActivity extends AppCompatActivity {
         return null;
     }
 
+    private LudexDb.GameRow manualVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants){
+            if(db.isManualGame(row.id))return row;
+        }
+        return null;
+    }
+
     private LudexDb.GameRow artworkVariant(DisplayGame game){
         LudexDb.GameRow best=game.primary;
         int bestScore=-1;
         for(LudexDb.GameRow row:game.variants){
             int score=0;
             if("android".equalsIgnoreCase(row.source)&&row.packageName!=null)score+=500;
+            LudexDb.ManualInfo manual=db.getManualInfo(row.id);
+            if(manual!=null&&!manual.imageUri.isBlank())score+=450;
             if(row.steam)score+=400;
             if(row.epic)score+=350;
             if(row.nintendo)score+=300;
@@ -983,14 +1000,33 @@ public final class MainActivity extends AppCompatActivity {
         ArrayList<String> actions=new ArrayList<>();
         actions.add("Alterar status");
         LudexDb.GameRow android=androidVariant(game);
+        LudexDb.GameRow manual=manualVariant(game);
         if(android!=null)actions.add("Ajustar horas Android");
+        if(manual!=null){
+            actions.add("Editar entrada manual");
+            actions.add("Remover entrada manual");
+        }
         actions.add("Excluir da lista");
         new MaterialAlertDialogBuilder(this).setTitle(game.title).setItems(actions.toArray(new String[0]),(d,which)->{
             String action=actions.get(which);
             if("Alterar status".equals(action))showStatusPicker(game);
             else if("Ajustar horas Android".equals(action)&&android!=null)calibratePlaytime(android);
+            else if("Editar entrada manual".equals(action)&&manual!=null)showManualGameDialog(manual);
+            else if("Remover entrada manual".equals(action)&&manual!=null)confirmDeleteManualGame(game,manual);
             else if("Excluir da lista".equals(action))confirmHideGame(game);
         }).show();
+    }
+
+    private void confirmDeleteManualGame(DisplayGame game,LudexDb.GameRow manual){
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Remover entrada manual?")
+            .setMessage("Remove apenas as horas e dados adicionados manualmente. Outras versões de "+game.title+" continuam na biblioteca.")
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Remover",(d,w)->{
+                db.deleteManualGame(manual.id);
+                refreshAsync(false);
+                toast("Entrada manual removida");
+            }).show();
     }
 
     private void confirmHideGame(DisplayGame game){
@@ -1908,6 +1944,15 @@ public final class MainActivity extends AppCompatActivity {
         view.setImageDrawable(fallback);view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
 
         final String expectedTag=g.id;
+        LudexDb.ManualInfo manualInfo=db.getManualInfo(g.id);
+        if(manualInfo!=null&&!manualInfo.imageUri.isBlank()){
+            io.execute(()->{
+                android.graphics.Bitmap bmp=loadManualArtwork(manualInfo.imageUri);
+                if(bmp==null)return;
+                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
+            });
+            return;
+        }
         LudexDb.SteamInfo steamInfo=db.getSteamInfo(g.id);
         if(steamInfo!=null&&!g.gameNative){
             io.execute(()->{
@@ -1962,6 +2007,14 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
+    private android.graphics.Bitmap loadManualArtwork(String uriText){
+        if(uriText==null||uriText.isBlank())return null;
+        try(InputStream in=getContentResolver().openInputStream(Uri.parse(uriText))){
+            if(in==null)return null;
+            return android.graphics.BitmapFactory.decodeStream(in);
+        }catch(Exception e){return null;}
+    }
+
     private void applyArtwork(ImageView view,String expectedTag,android.graphics.Bitmap bmp){
         Object tag=view.getTag();
         if(tag!=null&&expectedTag.equals(tag.toString())){view.setImageBitmap(bmp);view.setVisibility(View.VISIBLE);}
@@ -1973,7 +2026,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private String providerLabel(String source){
         if(source==null)return "Ludex";
-        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";default:return source;}
+        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";case "nintendo-manual":return "Nintendo";case "xbox-manual":return "Xbox";case "playstation-manual":return "PlayStation";case "pc-manual":return "PC";case "other-manual":return "Manual";default:return source;}
     }
     static String format(long sec){long h=sec/3600,m=(sec%3600)/60;return h>0?h+"h "+m+"min":m+"min";}
     private void toast(String s){Snackbar.make(findViewById(R.id.root),s,Snackbar.LENGTH_LONG).show();}
