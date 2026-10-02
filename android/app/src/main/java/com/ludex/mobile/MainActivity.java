@@ -1975,50 +1975,31 @@ public final class MainActivity extends AppCompatActivity {
         final String expectedTag=g.id;
         LudexDb.ManualInfo manualInfo=db.getManualInfo(g.id);
         if(manualInfo!=null&&!manualInfo.imageUri.isBlank()){
-            io.execute(()->{
-                android.graphics.Bitmap bmp=loadManualArtwork(manualInfo.imageUri);
-                if(bmp==null)return;
-                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-            });
+            loadArtworkAsync("manual:"+manualInfo.imageUri,view,expectedTag,()->loadManualArtwork(manualInfo.imageUri));
             return;
         }
         LudexDb.SteamInfo steamInfo=db.getSteamInfo(g.id);
         if(steamInfo!=null&&!g.gameNative){
-            io.execute(()->{
-                android.graphics.Bitmap bmp=GameArtworkLoader.load(this,"steam",steamInfo.appId);
-                if(bmp==null)return;
-                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-            });
+            loadArtworkAsync("steam:"+steamInfo.appId,view,expectedTag,()->GameArtworkLoader.load(this,"steam",steamInfo.appId));
             return;
         }
         LudexDb.EpicInfo epicInfo=db.getEpicInfo(g.id);
         if(epicInfo!=null&&!epicInfo.imageUrl.isBlank()){
-            io.execute(()->{
-                android.graphics.Bitmap bmp=EpicArtworkLoader.load(this,epicInfo.appName,epicInfo.imageUrl);
-                if(bmp==null)return;
-                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-            });
+            loadArtworkAsync("epic:"+epicInfo.appName,view,expectedTag,()->EpicArtworkLoader.load(this,epicInfo.appName,epicInfo.imageUrl));
             return;
         }
         if("nintendo".equals(g.source)){
             LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
             if(n!=null&&!n.imageUrl.isBlank()){
-                io.execute(()->{
-                    android.graphics.Bitmap bmp=NintendoArtworkLoader.load(this,n.titleId,n.imageUrl);
-                    if(bmp==null)return;
-                    runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-                });
+                loadArtworkAsync("nintendo:"+n.titleId,view,expectedTag,()->NintendoArtworkLoader.load(this,n.titleId,n.imageUrl));
             }
             return;
         }
         if(g.gameNative){
             LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
             if(launch==null)return;
-            io.execute(()->{
-                android.graphics.Bitmap bmp=GameArtworkLoader.load(this,launch.provider,launch.externalId);
-                if(bmp==null)return;
-                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-            });
+            loadArtworkAsync("gamenative:"+launch.provider+":"+launch.externalId,view,expectedTag,
+                ()->GameArtworkLoader.load(this,launch.provider,launch.externalId));
             return;
         }
         if(g.emulated){
@@ -2028,12 +2009,25 @@ public final class MainActivity extends AppCompatActivity {
             EmulatorRegistry.Emulator em=EmulatorRegistry.get(pkg);
             String libretro=em==null?null:em.libretroSystem;
             String key=SecretStore.get(this,"steamgriddb.api_key");
-            io.execute(()->{
-                android.graphics.Bitmap bmp=EmulatedArtworkLoader.load(this,g.platform,libretro,g.title,key);
-                if(bmp==null)return;
-                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-            });
+            String cacheKey="emulated:"+g.platform+":"+String.valueOf(libretro)+":"+g.title;
+            loadArtworkAsync(cacheKey,view,expectedTag,()->EmulatedArtworkLoader.load(this,g.platform,libretro,g.title,key));
         }
+    }
+
+    private void loadArtworkAsync(String cacheKey,ImageView view,String expectedTag,Callable<android.graphics.Bitmap> loader){
+        android.graphics.Bitmap cached=artworkMemory.get(cacheKey);
+        if(cached!=null){
+            applyArtwork(view,expectedTag,cached);
+            return;
+        }
+        artworkIo.execute(()->{
+            try{
+                android.graphics.Bitmap bmp=loader.call();
+                if(bmp==null)return;
+                artworkMemory.put(cacheKey,bmp);
+                runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
+            }catch(Exception ignored){}
+        });
     }
 
     private android.graphics.Bitmap loadManualArtwork(String uriText){
