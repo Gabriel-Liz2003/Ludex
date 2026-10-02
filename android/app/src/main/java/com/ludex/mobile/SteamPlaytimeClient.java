@@ -9,15 +9,17 @@ import java.util.*;
 public final class SteamPlaytimeClient {
     public static final class LibraryGame {
         public final String appId,title,iconHash;
-        public final long seconds;
+        public final long seconds,acquiredAtMs,lastPlayedAtMs;
         public final boolean familyShared;
 
-        LibraryGame(String appId,String title,String iconHash,long seconds,boolean familyShared){
+        LibraryGame(String appId,String title,String iconHash,long seconds,boolean familyShared,long acquiredAtMs,long lastPlayedAtMs){
             this.appId=appId;
             this.title=title;
             this.iconHash=iconHash==null?"":iconHash;
             this.seconds=Math.max(0,seconds);
             this.familyShared=familyShared;
+            this.acquiredAtMs=Math.max(0,acquiredAtMs);
+            this.lastPlayedAtMs=Math.max(0,lastPlayedAtMs);
         }
     }
 
@@ -60,7 +62,9 @@ public final class SteamPlaytimeClient {
                 title,
                 g.optString("img_icon_url",""),
                 minutes*60L,
-                false
+                false,
+                0,
+                unixSecondsToMillis(g.optLong("rtime_last_played",0))
             ));
         }
         return out;
@@ -119,7 +123,9 @@ public final class SteamPlaytimeClient {
                 title,
                 g.optString("img_icon_hash",""),
                 seconds,
-                !ownedByUser
+                !ownedByUser,
+                unixSecondsToMillis(g.optLong("rt_time_acquired",0)),
+                unixSecondsToMillis(g.optLong("rt_last_played",0))
             ));
         }
         return new FamilyLibrary(familyGroupId,out);
@@ -145,6 +151,34 @@ public final class SteamPlaytimeClient {
             }
         }catch(Exception ignored){}
         return out;
+    }
+
+    public static LibraryGame mergePreferOwned(LibraryGame current,LibraryGame incoming){
+        if(current==null)return incoming;
+        if(incoming==null)return current;
+
+        LibraryGame owned=!incoming.familyShared?incoming:(!current.familyShared?current:incoming);
+        LibraryGame other=owned==incoming?current:incoming;
+
+        String icon=owned.iconHash==null||owned.iconHash.isBlank()?other.iconHash:owned.iconHash;
+        long seconds=Math.max(owned.seconds,other.seconds);
+        long acquired=owned.acquiredAtMs>0?owned.acquiredAtMs:other.acquiredAtMs;
+        long lastPlayed=Math.max(owned.lastPlayedAtMs,other.lastPlayedAtMs);
+
+        return new LibraryGame(
+            owned.appId,
+            owned.title,
+            icon,
+            seconds,
+            owned.familyShared,
+            acquired,
+            lastPlayed
+        );
+    }
+
+    private static long unixSecondsToMillis(long value){
+        if(value<=0)return 0;
+        return value*1000L;
     }
 
     public static String extractAccessToken(String raw) throws JSONException {

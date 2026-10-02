@@ -12,7 +12,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         public String id,title,platform,source,packageName,status,linkedProvider;
         public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo,epic;
         public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,epicSeconds,otherSeconds;
-        public long firstSeenAt,firstActivityAt,acquiredAt;
+        public long firstSeenAt,firstActivityAt,acquiredAt,lastPlayedAt;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
     public static final class GameNativeLaunch {
@@ -38,7 +38,10 @@ public final class LudexDb extends SQLiteOpenHelper {
     public static final class SteamInfo {
         public final String appId;
         public final boolean familyShared;
-        SteamInfo(String appId,boolean familyShared){this.appId=appId;this.familyShared=familyShared;}
+        public final long acquiredAt,lastPlayedAt;
+        SteamInfo(String appId,boolean familyShared,long acquiredAt,long lastPlayedAt){
+            this.appId=appId;this.familyShared=familyShared;this.acquiredAt=acquiredAt;this.lastPlayedAt=lastPlayedAt;
+        }
     }
     public static final class EpicInfo {
         public final String appName,namespace,catalogItemId,imageUrl;
@@ -61,7 +64,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,16);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,17);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -73,7 +76,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE eden_games(game_id TEXT PRIMARY KEY,package_name TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,program_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE emulator_games(game_id TEXT PRIMARY KEY,emulator_package TEXT NOT NULL,platform_id TEXT NOT NULL,launch_uri TEXT NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
-        db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,acquired_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',acquisition_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_unresolved(app_name TEXT PRIMARY KEY,namespace TEXT NOT NULL DEFAULT '',catalog_item_id TEXT NOT NULL DEFAULT '',seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
@@ -104,6 +107,10 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
         if(oldV<15)db.execSQL("CREATE TABLE IF NOT EXISTS manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         if(oldV<16)db.execSQL("CREATE TABLE IF NOT EXISTS epic_unresolved(app_name TEXT PRIMARY KEY,namespace TEXT NOT NULL DEFAULT '',catalog_item_id TEXT NOT NULL DEFAULT '',seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        if(oldV<17){
+            try{db.execSQL("ALTER TABLE steam_games ADD COLUMN acquired_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
+            try{db.execSQL("ALTER TABLE steam_games ADD COLUMN last_played_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
+        }
     }
 
     private static String manualSource(String platformKey){
@@ -223,7 +230,9 @@ public final class LudexDb extends SQLiteOpenHelper {
             "g.first_seen_at,g.first_opened_at,"+
             "COALESCE((SELECT MIN(started_at) FROM play_sessions ps WHERE ps.game_id=g.id),0),"+
             "COALESCE((SELECT first_played_at FROM nintendo_games ng WHERE ng.game_id=g.id LIMIT 1),''),"+
-            "COALESCE((SELECT acquisition_at FROM epic_games eg WHERE eg.game_id=g.id LIMIT 1),0) "+
+            "COALESCE((SELECT acquisition_at FROM epic_games eg WHERE eg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT acquired_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0) "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
             while(c.moveToNext()){
@@ -245,7 +254,10 @@ public final class LudexDb extends SQLiteOpenHelper {
                 long sessionFirst=Math.max(0,c.getLong(30));
                 long nintendoFirst=parseIsoMillis(c.getString(31));
                 g.firstActivityAt=minPositive(firstOpened,minPositive(sessionFirst,nintendoFirst));
-                g.acquiredAt=Math.max(0,c.getLong(32));
+                long epicAcquired=Math.max(0,c.getLong(32));
+                long steamAcquired=Math.max(0,c.getLong(33));
+                g.acquiredAt=minPositive(epicAcquired,steamAcquired);
+                g.lastPlayedAt=Math.max(0,c.getLong(34));
                 out.add(g);
             }
         }
@@ -311,7 +323,8 @@ public final class LudexDb extends SQLiteOpenHelper {
                 db.update("games",gu,"id=?",new String[]{gameId});
 
                 ContentValues s=new ContentValues();
-                s.put("game_id",gameId);s.put("app_id",item.appId);s.put("family_shared",item.familyShared?1:0);s.put("updated_at",now);
+                s.put("game_id",gameId);s.put("app_id",item.appId);s.put("family_shared",item.familyShared?1:0);
+                s.put("acquired_at",Math.max(0,item.acquiredAtMs));s.put("last_played_at",Math.max(0,item.lastPlayedAtMs));s.put("updated_at",now);
                 db.insertWithOnConflict("steam_games",null,s,SQLiteDatabase.CONFLICT_REPLACE);
 
                 ContentValues p=new ContentValues();
@@ -325,8 +338,8 @@ public final class LudexDb extends SQLiteOpenHelper {
     }
 
     public SteamInfo getSteamInfo(String gameId){
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT app_id,family_shared FROM steam_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
-            if(c.moveToFirst())return new SteamInfo(c.getString(0),c.getInt(1)!=0);
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT app_id,family_shared,acquired_at,last_played_at FROM steam_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            if(c.moveToFirst())return new SteamInfo(c.getString(0),c.getInt(1)!=0,c.getLong(2),c.getLong(3));
         }
         return null;
     }

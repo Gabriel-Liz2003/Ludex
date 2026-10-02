@@ -54,7 +54,7 @@ public final class MainActivity extends AppCompatActivity {
         final String key;
         final ArrayList<LudexDb.GameRow> variants=new ArrayList<>();
         String title="",status="Quero jogar";
-        long seconds,firstActivityAt,acquiredAt,firstSeenAt;
+        long seconds,firstActivityAt,acquiredAt,lastPlayedAt,firstSeenAt;
         boolean favorite;
         LudexDb.GameRow primary;
 
@@ -812,6 +812,7 @@ public final class MainActivity extends AppCompatActivity {
             game.favorite|=row.favorite;
             game.firstActivityAt=minPositiveTime(game.firstActivityAt,row.firstActivityAt);
             game.acquiredAt=minPositiveTime(game.acquiredAt,row.acquiredAt);
+            game.lastPlayedAt=Math.max(game.lastPlayedAt,row.lastPlayedAt);
             game.firstSeenAt=minPositiveTime(game.firstSeenAt,row.firstSeenAt);
             if(game.title.isEmpty()||titleQuality(row.title)>titleQuality(game.title))game.title=row.title;
             if(game.primary==null||primaryScore(row)>primaryScore(game.primary))game.primary=row;
@@ -836,6 +837,7 @@ public final class MainActivity extends AppCompatActivity {
     private static String gameDateLabel(DisplayGame game){
         if(game.firstActivityAt>0)return "1ª atividade: "+formatDate(game.firstActivityAt);
         if(game.acquiredAt>0)return "Na biblioteca desde: "+formatDate(game.acquiredAt);
+        if(game.lastPlayedAt>0)return "Última vez jogado: "+formatDate(game.lastPlayedAt);
         if(game.firstSeenAt>0)return "No Ludex desde: "+formatDate(game.firstSeenAt);
         return "";
     }
@@ -1502,7 +1504,7 @@ public final class MainActivity extends AppCompatActivity {
                 SteamPlaytimeClient.FamilyLibrary family=SteamPlaytimeClient.getFamilyLibrary(familyToken,steamId);
                 db.setSetting("steam.family_group_id",family.familyGroupId);
                 for(SteamPlaytimeClient.LibraryGame game:family.games){
-                    merged.put(game.appId,game);
+                    merged.put(game.appId,SteamPlaytimeClient.mergePreferOwned(merged.get(game.appId),game));
                     if(game.familyShared)familyGames++;
                 }
             }catch(Exception e){
@@ -1513,7 +1515,9 @@ public final class MainActivity extends AppCompatActivity {
 
         if(key!=null&&!key.isEmpty()){
             List<SteamPlaytimeClient.LibraryGame> owned=SteamPlaytimeClient.getOwnedLibrary(key,steamId);
-            for(SteamPlaytimeClient.LibraryGame game:owned)merged.put(game.appId,game);
+            for(SteamPlaytimeClient.LibraryGame game:owned){
+                merged.put(game.appId,SteamPlaytimeClient.mergePreferOwned(merged.get(game.appId),game));
+            }
         }
 
         int imported=db.syncSteamLibrary(new ArrayList<>(merged.values()));
