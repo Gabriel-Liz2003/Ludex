@@ -15,6 +15,7 @@ public final class EpicLibraryClient {
     private static final String LIBRARY_URL="https://library-service.live.use1a.on.epicgames.com/library/api/public/items";
     private static final String PLAYTIME_URL="https://library-service.live.use1a.on.epicgames.com/library/api/public/playtime/account";
     private static final String CATALOG_URL="https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace";
+    private static final String LAUNCHER_ASSETS_URL="https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/public/assets/Windows?label=Live";
     private static final String REDIRECT_URL="https://www.epicgames.com/id/api/redirect";
     private static final String USER_AGENT="UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit";
 
@@ -34,8 +35,9 @@ public final class EpicLibraryClient {
     public static final class LibraryGame {
         public final String appName,namespace,catalogItemId,title,imageUrl;
         public final long seconds,acquiredAtMs;
+        public final boolean launcherFallback;
 
-        LibraryGame(String appName,String namespace,String catalogItemId,String title,String imageUrl,long seconds,long acquiredAtMs){
+        LibraryGame(String appName,String namespace,String catalogItemId,String title,String imageUrl,long seconds,long acquiredAtMs,boolean launcherFallback){
             this.appName=appName;
             this.namespace=namespace;
             this.catalogItemId=catalogItemId;
@@ -43,13 +45,15 @@ public final class EpicLibraryClient {
             this.imageUrl=imageUrl==null?"":imageUrl;
             this.seconds=Math.max(0,seconds);
             this.acquiredAtMs=Math.max(0,acquiredAtMs);
+            this.launcherFallback=launcherFallback;
         }
     }
 
     private static final class RawItem {
         final String appName,namespace,catalogItemId,country,title,imageUrl;
         final long acquiredAtMs;
-        RawItem(String appName,String namespace,String catalogItemId,String country,String title,String imageUrl,long acquiredAtMs){
+        final boolean launcherFallback;
+        RawItem(String appName,String namespace,String catalogItemId,String country,String title,String imageUrl,long acquiredAtMs,boolean launcherFallback){
             this.appName=appName;
             this.namespace=namespace;
             this.catalogItemId=catalogItemId;
@@ -57,6 +61,7 @@ public final class EpicLibraryClient {
             this.title=title==null?"":title.trim();
             this.imageUrl=imageUrl==null?"":imageUrl.trim();
             this.acquiredAtMs=Math.max(0,acquiredAtMs);
+            this.launcherFallback=launcherFallback;
         }
     }
 
@@ -162,13 +167,30 @@ public final class EpicLibraryClient {
         List<RawItem> raw=fetchLibrary(credentials.accessToken);
         Map<String,Long> playtime=fetchPlaytime(credentials.accessToken,credentials.accountId);
 
+        // A Library Service pode omitir alguns títulos instaláveis/legados. Para qualquer
+        // artifact jogado que não apareceu nela, use os assets do Epic Games Launcher
+        // para recuperar appName -> namespace/catalogItemId.
+        try{mergePlayedLauncherAssets(credentials.accessToken,raw,playtime);}catch(Exception ignored){}
+
+        // Mesmo se os dois endpoints de biblioteca falharem em fornecer metadata,
+        // preserve todo artifact com horas no snapshot para não apagá-lo do banco.
+        LinkedHashSet<String> knownApps=new LinkedHashSet<>();
+        for(RawItem item:raw)knownApps.add(item.appName.toLowerCase(Locale.ROOT));
+        for(Map.Entry<String,Long> entry:playtime.entrySet()){
+            if(entry.getValue()<=0)continue;
+            if(knownApps.contains(entry.getKey().toLowerCase(Locale.ROOT)))continue;
+            raw.add(new RawItem(entry.getKey(),"","","BR","","",0,false));
+        }
+
         // Só consulte o catálogo para registros JOGADOS que ainda estejam sem nome legível.
         // O item continua no snapshot mesmo se a metadata falhar, para não ser tratado como removido da conta.
         LinkedHashMap<String,List<RawItem>> unresolvedByNamespace=new LinkedHashMap<>();
         for(RawItem item:raw){
             long seconds=playtime.getOrDefault(item.appName,0L);
             if(seconds<=0||isReadableTitle(item.title))continue;
-            unresolvedByNamespace.computeIfAbsent(item.namespace,k->new ArrayList<>()).add(item);
+            if(!item.namespace.isBlank()&&!item.catalogItemId.isBlank()){
+                unresolvedByNamespace.computeIfAbsent(item.namespace,k->new ArrayList<>()).add(item);
+            }
         }
 
         HashMap<String,JSONObject> resolvedCatalog=new HashMap<>();
@@ -236,7 +258,7 @@ public final class EpicLibraryClient {
 
             String image=item.imageUrl;
             if(image.isBlank()&&data!=null)image=bestImage(data.optJSONArray("keyImages"));
-            out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds,item.acquiredAtMs));
+            out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds,item.acquiredAtMs,item.launcherFallback));
         }
 
         LinkedHashMap<String,LibraryGame> unique=new LinkedHashMap<>();
@@ -299,7 +321,8 @@ public final class EpicLibraryClient {
                         record.optString("country","BR"),
                         title,
                         image,
-                        parseApiDate(record.optString("acquisitionDate",""))
+                        parseApiDate(record.optString("acquisitionDate","")),
+                        false
                     ));
                 }
             }
@@ -311,6 +334,41 @@ public final class EpicLibraryClient {
         }while(cursor!=null);
 
         return out;
+    }
+
+    private static void mergePlayedLauncherAssets(String accessToken,List<RawItem> raw,Map<String,Long> playtime) throws Exception {
+        LinkedHashSet<String> known=new LinkedHashSet<>();
+        for(RawItem item:raw)known.add(item.appName.toLowerCase(Locale.ROOT));
+
+        String text=request("GET",LAUNCHER_ASSETS_URL,"Bearer "+accessToken,null,null);
+        JSONArray assets=new JSONArray(text);
+        for(int i=0;i<assets.length();i++){
+            JSONObject asset=assets.optJSONObject(i);
+            if(asset==null)continue;
+
+            String appName=asset.optString("appName","").trim();
+            if(appName.isBlank())continue;
+            Long seconds=playtime.get(appName);
+            if(seconds==null||seconds<=0)continue;
+            if(known.contains(appName.toLowerCase(Locale.ROOT)))continue;
+
+            String namespace=asset.optString("namespace","").trim();
+            String catalog=asset.optString("catalogItemId","").trim();
+            if(namespace.isBlank()||catalog.isBlank())continue;
+            if("ue".equalsIgnoreCase(namespace)||"89efe5924d3d467c839449ab6ab52e7f".equalsIgnoreCase(namespace))continue;
+
+            raw.add(new RawItem(
+                appName,
+                namespace,
+                catalog,
+                "BR",
+                "",
+                "",
+                0,
+                true
+            ));
+            known.add(appName.toLowerCase(Locale.ROOT));
+        }
     }
 
     private static Map<String,Long> fetchPlaytime(String accessToken,String accountId) throws Exception {
