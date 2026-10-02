@@ -46,6 +46,13 @@ public final class LudexDb extends SQLiteOpenHelper {
             this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.imageUrl=imageUrl;
         }
     }
+    public static final class EpicPending {
+        public final String appName,namespace,catalogItemId;
+        public final long seconds;
+        EpicPending(String appName,String namespace,String catalogItemId,long seconds){
+            this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.seconds=seconds;
+        }
+    }
     public static final class ManualInfo {
         public final String platformKey,imageUri;
         public final long firstPlayedAt;
@@ -54,7 +61,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,15);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,16);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -68,6 +75,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',acquisition_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE epic_unresolved(app_name TEXT PRIMARY KEY,namespace TEXT NOT NULL DEFAULT '',catalog_item_id TEXT NOT NULL DEFAULT '',seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
@@ -95,6 +103,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             db.execSQL("UPDATE games SET first_seen_at=CASE WHEN updated_at>0 THEN updated_at ELSE strftime('%s','now')*1000 END WHERE first_seen_at=0");
         }
         if(oldV<15)db.execSQL("CREATE TABLE IF NOT EXISTS manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        if(oldV<16)db.execSQL("CREATE TABLE IF NOT EXISTS epic_unresolved(app_name TEXT PRIMARY KEY,namespace TEXT NOT NULL DEFAULT '',catalog_item_id TEXT NOT NULL DEFAULT '',seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
     }
 
     private static String manualSource(String platformKey){
@@ -365,24 +374,20 @@ public final class LudexDb extends SQLiteOpenHelper {
                     }
                 }
 
-                // O item existe na conta, mas a metadata pode falhar temporariamente.
-                // Preserve nomes válidos anteriores; hashes antigos sem metadata devem sumir da UI.
+                // O item existe na conta, mas não há metadata confiável para exibir.
+                // Preserve-o numa fila explícita de pendências, em vez de apagá-lo ou mostrar hash.
                 if(displayTitle.isBlank()){
-                    if(gameId!=null){
-                        db.delete("epic_games","game_id=?",new String[]{gameId});
-                        db.delete("imported_playtime","game_id=? AND lower(provider) LIKE 'epic%'",new String[]{gameId});
-                        db.execSQL(
-                            "DELETE FROM games WHERE id=? AND source='epic' "+
-                            "AND NOT EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=games.id) "+
-                            "AND NOT EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=games.id) "+
-                            "AND NOT EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=games.id) "+
-                            "AND NOT EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=games.id) "+
-                            "AND NOT EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=games.id)",
-                            new Object[]{gameId}
-                        );
-                    }
+                    ContentValues pending=new ContentValues();
+                    pending.put("app_name",item.appName);
+                    pending.put("namespace",item.namespace);
+                    pending.put("catalog_item_id",item.catalogItemId);
+                    pending.put("seconds",Math.max(0,item.seconds));
+                    pending.put("updated_at",now);
+                    db.insertWithOnConflict("epic_unresolved",null,pending,SQLiteDatabase.CONFLICT_REPLACE);
                     continue;
                 }
+
+                db.delete("epic_unresolved","app_name=? COLLATE NOCASE",new String[]{item.appName});
 
                 boolean created=false;
                 if(gameId==null){
@@ -436,9 +441,59 @@ public final class LudexDb extends SQLiteOpenHelper {
                 );
             }
 
+            ArrayList<String> stalePending=new ArrayList<>();
+            try(Cursor cur=db.rawQuery("SELECT app_name FROM epic_unresolved",null)){
+                while(cur.moveToNext())if(!seen.contains(cur.getString(0)))stalePending.add(cur.getString(0));
+            }
+            for(String appName:stalePending)db.delete("epic_unresolved","app_name=?",new String[]{appName});
+
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         return count;
+    }
+
+    public List<EpicPending> listEpicPending(){
+        ArrayList<EpicPending> out=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT app_name,namespace,catalog_item_id,seconds FROM epic_unresolved WHERE seconds>0 ORDER BY seconds DESC",
+            null)){
+            while(c.moveToNext())out.add(new EpicPending(c.getString(0),c.getString(1),c.getString(2),c.getLong(3)));
+        }
+        return out;
+    }
+
+    public void resolveEpicPending(String appName,String title){
+        if(appName==null||appName.isBlank()||title==null||title.trim().isBlank())return;
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();long now=System.currentTimeMillis();
+        try{
+            String namespace="",catalog="";long seconds=0;
+            try(Cursor c=db.rawQuery(
+                "SELECT namespace,catalog_item_id,seconds FROM epic_unresolved WHERE app_name=? COLLATE NOCASE LIMIT 1",
+                new String[]{appName})){
+                if(!c.moveToFirst())return;
+                namespace=c.getString(0);catalog=c.getString(1);seconds=c.getLong(2);
+            }
+
+            String gameId="epic:"+appName;
+            ContentValues g=new ContentValues();
+            g.put("id",gameId);g.put("title",title.trim());g.put("platform","PC");g.put("source","epic");
+            g.put("installed",0);g.put("first_seen_at",now);g.put("updated_at",now);
+            db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+            ContentValues gu=new ContentValues();gu.put("title",title.trim());gu.put("platform","PC");gu.put("updated_at",now);
+            db.update("games",gu,"id=?",new String[]{gameId});
+
+            ContentValues e=new ContentValues();
+            e.put("game_id",gameId);e.put("app_name",appName);e.put("namespace",namespace==null?"":namespace);
+            e.put("catalog_item_id",catalog==null?"":catalog);e.put("image_url","");e.put("acquisition_at",0);e.put("updated_at",now);
+            db.insertWithOnConflict("epic_games",null,e,SQLiteDatabase.CONFLICT_REPLACE);
+
+            ContentValues p=new ContentValues();
+            p.put("game_id",gameId);p.put("provider","epic");p.put("seconds",Math.max(0,seconds));p.put("updated_at",now);
+            db.insertWithOnConflict("imported_playtime",null,p,SQLiteDatabase.CONFLICT_REPLACE);
+
+            db.delete("epic_unresolved","app_name=? COLLATE NOCASE",new String[]{appName});
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
 
     public Map<String,EpicLibraryClient.CachedMetadata> getEpicMetadataCache(){

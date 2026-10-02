@@ -311,6 +311,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.steam_sync).setOnClickListener(v->syncSteamPlaytime(true));
         findViewById(R.id.epic_connect).setOnClickListener(v->showEpicConnect());
         findViewById(R.id.epic_sync).setOnClickListener(v->syncEpicLibrary(true));
+        findViewById(R.id.epic_pending).setOnClickListener(v->showEpicPending());
         findViewById(R.id.nintendo_connect).setOnClickListener(v->showNintendoConnect());
         findViewById(R.id.nintendo_sync).setOnClickListener(v->syncNintendoPlaytime(true));
         findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
@@ -1553,8 +1554,10 @@ public final class MainActivity extends AppCompatActivity {
     private void updateEpicSyncInfo(){
         boolean connected=!SecretStore.get(this,"epic.refresh_token").isEmpty();
         long last=db.getSettingLong("epic.last_sync_ms",0);
+        View pendingButton=findViewById(R.id.epic_pending);
         if(!connected){
             epicSyncInfo.setText("Conta Epic não conectada. Conecte para importar biblioteca e horas jogadas.");
+            pendingButton.setVisibility(View.GONE);
             return;
         }
         String name=db.getSetting("epic.display_name","");
@@ -1563,6 +1566,8 @@ public final class MainActivity extends AppCompatActivity {
         long unresolved=db.getSettingLong("epic.last_unresolved_played_count",0);
         String unresolvedInfo=unresolved>0?" · "+unresolved+" artifacts com horas sem metadata":"";
         epicSyncInfo.setText(who+suffix+unresolvedInfo);
+        pendingButton.setVisibility(unresolved>0?View.VISIBLE:View.GONE);
+        if(pendingButton instanceof Button)((Button)pendingButton).setText("Ver pendências Epic ("+unresolved+")");
     }
 
     private void saveEpicCredentials(EpicLibraryClient.Credentials credentials) throws Exception {
@@ -1609,15 +1614,15 @@ public final class MainActivity extends AppCompatActivity {
     private EpicSyncResult syncEpicLibraryNow() throws Exception {
         EpicLibraryClient.Credentials credentials=validEpicCredentials();
         List<EpicLibraryClient.LibraryGame> library=EpicLibraryClient.getOwnedLibrary(credentials,db.getEpicMetadataCache());
-        int played=0,unresolvedPlayed=0,recoveredFromLauncher=0;
+        int played=0,recoveredFromLauncher=0;
         for(EpicLibraryClient.LibraryGame game:library){
             if(game.seconds>0){
                 played++;
-                if(!EpicLibraryClient.isReadableTitle(game.title))unresolvedPlayed++;
                 if(game.launcherFallback&&EpicLibraryClient.isReadableTitle(game.title))recoveredFromLauncher++;
             }
         }
         db.syncEpicLibrary(library);
+        int unresolvedPlayed=db.listEpicPending().size();
         db.setSetting("epic.last_sync_ms",Long.toString(System.currentTimeMillis()));
         db.setSetting("epic.last_library_count",Integer.toString(library.size()));
         db.setSetting("epic.last_played_count",Integer.toString(played));
@@ -1653,6 +1658,75 @@ public final class MainActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    private void showEpicPending(){
+        List<LudexDb.EpicPending> pending=db.listEpicPending();
+        if(pending.isEmpty()){
+            toast("Nenhuma pendência Epic");
+            updateEpicSyncInfo();
+            return;
+        }
+
+        String[] labels=new String[pending.size()];
+        for(int i=0;i<pending.size();i++){
+            LudexDb.EpicPending item=pending.get(i);
+            labels[i]=format(item.seconds)+" · "+item.appName;
+        }
+
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Pendências Epic")
+            .setMessage("São artifacts com horas que a Epic não forneceu com título confiável. Toque em um item para associar um nome manualmente.")
+            .setItems(labels,(d,which)->showEpicPendingResolver(pending.get(which)))
+            .setNegativeButton("Fechar",null)
+            .show();
+    }
+
+    private void showEpicPendingResolver(LudexDb.EpicPending item){
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,4,pad,0);
+
+        TextView detail=new TextView(this);
+        String ns=item.namespace==null||item.namespace.isBlank()?"—":item.namespace;
+        String catalog=item.catalogItemId==null||item.catalogItemId.isBlank()?"—":item.catalogItemId;
+        detail.setText("Artifact: "+item.appName+"\nHoras: "+format(item.seconds)+"\nNamespace: "+ns+"\nCatalog ID: "+catalog);
+        detail.setTextColor(getColor(R.color.ludex_muted));
+        detail.setTextSize(12);
+        wrap.addView(detail,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText title=new EditText(this);
+        title.setHint("Nome correto do jogo");
+        title.setSingleLine(true);
+        LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT);
+        titleParams.topMargin=pad/2;
+        wrap.addView(title,titleParams);
+
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle("Resolver artifact Epic")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setNeutralButton("Copiar ID",(d,w)->{
+                android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
+                if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText("Epic artifactId",item.appName));
+                toast("Artifact ID copiado");
+            })
+            .setPositiveButton("Associar",null)
+            .create();
+
+        dialog.setOnShowListener(ignored->dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String value=title.getText()==null?"":title.getText().toString().trim();
+            if(value.isBlank()){title.setError("Informe o nome do jogo");return;}
+            db.resolveEpicPending(item.appName,value);
+            int left=db.listEpicPending().size();
+            db.setSetting("epic.last_unresolved_played_count",Integer.toString(left));
+            dialog.dismiss();
+            updateEpicSyncInfo();
+            reloadLibraryAsync();
+            toast("Artifact associado a "+value);
+        }));
+        dialog.show();
     }
 
     private void showEpicConnect(){

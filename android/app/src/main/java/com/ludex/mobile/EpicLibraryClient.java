@@ -20,6 +20,35 @@ public final class EpicLibraryClient {
     private static final String REDIRECT_URL="https://www.epicgames.com/id/api/redirect";
     private static final String USER_AGENT="UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit";
 
+    private static final class KnownProduct {
+        final String appName,title,namespace,catalogItemId;
+        KnownProduct(String appName,String title,String namespace,String catalogItemId){
+            this.appName=appName;this.title=title;this.namespace=namespace;this.catalogItemId=catalogItemId;
+        }
+    }
+
+    // Fallbacks para artifacts públicos conhecidos que a Library Service pode omitir ou
+    // devolver sem metadata. Mantidos pequenos e baseados em manifests reais do EGS.
+    private static final Map<String,KnownProduct> KNOWN_PRODUCTS;
+    static {
+        LinkedHashMap<String,KnownProduct> known=new LinkedHashMap<>();
+        KnownProduct genshin=new KnownProduct(
+            "41869934302e4b8cafac2d3c0e7c293d",
+            "Genshin Impact",
+            "879b0d8776ab46a59a129983ba78f0ce",
+            "7d690c122fde4c60bed85405f343ad10"
+        );
+        KnownProduct cyberpunk=new KnownProduct(
+            "Ginger",
+            "Cyberpunk 2077",
+            "77f2b98e2cef40c8a7437518bf420e47",
+            "5beededaad9743df90e8f07d92df153f"
+        );
+        known.put(genshin.appName.toLowerCase(Locale.ROOT),genshin);
+        known.put(cyberpunk.appName.toLowerCase(Locale.ROOT),cyberpunk);
+        KNOWN_PRODUCTS=Collections.unmodifiableMap(known);
+    }
+
     public static final class Credentials {
         public final String accessToken,refreshToken,accountId,displayName;
         public final long expiresAtMs;
@@ -189,14 +218,34 @@ public final class EpicLibraryClient {
         // para recuperar appName -> namespace/catalogItemId.
         try{mergePlayedLauncherAssets(credentials.accessToken,raw,playtime);}catch(Exception ignored){}
 
+        // Alguns jogos reais têm appNames estáveis conhecidos, mas deixam de aparecer ou
+        // chegam sem título nos endpoints atuais. Enriqueça esses casos antes de classificá-los
+        // como artifacts sem metadata.
+        applyKnownProducts(raw);
+
         // Mesmo se os dois endpoints de biblioteca falharem em fornecer metadata,
         // preserve todo artifact com horas no snapshot para não apagá-lo do banco.
         LinkedHashSet<String> knownApps=new LinkedHashSet<>();
         for(RawItem item:raw)knownApps.add(item.appName.toLowerCase(Locale.ROOT));
         for(Map.Entry<String,Long> entry:playtime.entrySet()){
             if(entry.getValue()<=0)continue;
-            if(knownApps.contains(entry.getKey().toLowerCase(Locale.ROOT)))continue;
-            raw.add(new RawItem(entry.getKey(),"","","BR","","",0,false));
+            String key=entry.getKey().toLowerCase(Locale.ROOT);
+            if(knownApps.contains(key))continue;
+            KnownProduct known=KNOWN_PRODUCTS.get(key);
+            if(known!=null){
+                raw.add(new RawItem(
+                    entry.getKey(),
+                    known.namespace,
+                    known.catalogItemId,
+                    "BR",
+                    known.title,
+                    "",
+                    0,
+                    true
+                ));
+            }else{
+                raw.add(new RawItem(entry.getKey(),"","","BR","","",0,false));
+            }
         }
 
         // Só consulte o catálogo para registros JOGADOS que ainda estejam sem nome legível.
@@ -259,6 +308,28 @@ public final class EpicLibraryClient {
         LinkedHashMap<String,LibraryGame> unique=new LinkedHashMap<>();
         for(LibraryGame game:out)unique.put(game.appName,game);
         return new ArrayList<>(unique.values());
+    }
+
+    private static void applyKnownProducts(List<RawItem> raw){
+        for(int i=0;i<raw.size();i++){
+            RawItem item=raw.get(i);
+            KnownProduct known=KNOWN_PRODUCTS.get(item.appName.toLowerCase(Locale.ROOT));
+            if(known==null)continue;
+
+            String title=isReadableTitle(item.title)?item.title:known.title;
+            String namespace=item.namespace.isBlank()?known.namespace:item.namespace;
+            String catalog=item.catalogItemId.isBlank()?known.catalogItemId:item.catalogItemId;
+            raw.set(i,new RawItem(
+                item.appName,
+                namespace,
+                catalog,
+                item.country,
+                title,
+                item.imageUrl,
+                item.acquiredAtMs,
+                item.launcherFallback
+            ));
+        }
     }
 
     private static Map<String,JSONObject> resolveCatalogGroup(String accessToken,List<RawItem> group,Map<String,Long> playtime){

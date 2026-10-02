@@ -143,6 +143,11 @@
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:text="Sincronizar biblioteca Epic"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/epic_pending"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    android:text="Ver pendências Epic"/>
 
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="20dp" android:text="Conta Nintendo"
