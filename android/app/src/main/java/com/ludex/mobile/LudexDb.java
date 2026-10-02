@@ -46,8 +46,15 @@ public final class LudexDb extends SQLiteOpenHelper {
             this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.imageUrl=imageUrl;
         }
     }
+    public static final class ManualInfo {
+        public final String platformKey,imageUri;
+        public final long firstPlayedAt;
+        ManualInfo(String platformKey,String imageUri,long firstPlayedAt){
+            this.platformKey=platformKey;this.imageUri=imageUri==null?"":imageUri;this.firstPlayedAt=firstPlayedAt;
+        }
+    }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,14);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,15);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -61,6 +68,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE nintendo_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT 'Nintendo Switch',first_played_at TEXT NOT NULL DEFAULT '',last_played_at TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',acquisition_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
@@ -86,6 +94,87 @@ public final class LudexDb extends SQLiteOpenHelper {
             try{db.execSQL("ALTER TABLE epic_games ADD COLUMN acquisition_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
             db.execSQL("UPDATE games SET first_seen_at=CASE WHEN updated_at>0 THEN updated_at ELSE strftime('%s','now')*1000 END WHERE first_seen_at=0");
         }
+        if(oldV<15)db.execSQL("CREATE TABLE IF NOT EXISTS manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+    }
+
+    private static String manualSource(String platformKey){
+        String key=platformKey==null?"other":platformKey.toLowerCase(Locale.ROOT);
+        switch(key){
+            case "nintendo":return "nintendo-manual";
+            case "xbox":return "xbox-manual";
+            case "playstation":return "playstation-manual";
+            case "pc":return "pc-manual";
+            default:return "other-manual";
+        }
+    }
+
+    private static String manualProvider(String platformKey){
+        String key=platformKey==null?"other":platformKey.toLowerCase(Locale.ROOT);
+        if("nintendo".equals(key))return "nintendo-manual";
+        return key+"-manual";
+    }
+
+    public String addManualGame(String title,String platform,String platformKey,long seconds,long firstPlayedAt,String imageUri){
+        String id="manual:"+UUID.randomUUID();
+        saveManualGame(id,title,platform,platformKey,seconds,firstPlayedAt,imageUri,true);
+        return id;
+    }
+
+    public void updateManualGame(String gameId,String title,String platform,String platformKey,long seconds,long firstPlayedAt,String imageUri){
+        if(gameId==null||gameId.isBlank())return;
+        saveManualGame(gameId,title,platform,platformKey,seconds,firstPlayedAt,imageUri,false);
+    }
+
+    private void saveManualGame(String gameId,String title,String platform,String platformKey,long seconds,long firstPlayedAt,String imageUri,boolean create){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();long now=System.currentTimeMillis();
+        try{
+            ContentValues g=new ContentValues();
+            if(create)g.put("id",gameId);
+            g.put("title",title);g.put("platform",platform);g.put("source",manualSource(platformKey));g.put("installed",0);
+            if(create)g.put("first_seen_at",now);
+            g.put("first_opened_at",Math.max(0,firstPlayedAt));g.put("updated_at",now);
+            if(create)db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_ABORT);
+            else db.update("games",g,"id=?",new String[]{gameId});
+
+            ContentValues m=new ContentValues();
+            m.put("game_id",gameId);m.put("platform_key",platformKey==null?"other":platformKey);
+            m.put("image_uri",imageUri==null?"":imageUri);m.put("first_played_at",Math.max(0,firstPlayedAt));m.put("updated_at",now);
+            db.insertWithOnConflict("manual_games",null,m,SQLiteDatabase.CONFLICT_REPLACE);
+
+            db.delete("imported_playtime","game_id=? AND provider LIKE '%-manual'",new String[]{gameId});
+            ContentValues p=new ContentValues();
+            p.put("game_id",gameId);p.put("provider",manualProvider(platformKey));p.put("seconds",Math.max(0,seconds));p.put("updated_at",now);
+            db.insertWithOnConflict("imported_playtime",null,p,SQLiteDatabase.CONFLICT_REPLACE);
+            db.delete("hidden_games","game_id=?",new String[]{gameId});
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+
+    public ManualInfo getManualInfo(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT platform_key,image_uri,first_played_at FROM manual_games WHERE game_id=? LIMIT 1",
+            new String[]{gameId})){
+            if(c.moveToFirst())return new ManualInfo(c.getString(0),c.getString(1),c.getLong(2));
+        }
+        return null;
+    }
+
+    public boolean isManualGame(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM manual_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            return c.moveToFirst();
+        }
+    }
+
+    public void deleteManualGame(String gameId){
+        if(gameId==null||gameId.isBlank())return;
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try{
+            db.delete("manual_games","game_id=?",new String[]{gameId});
+            db.delete("imported_playtime","game_id=? AND provider LIKE '%-manual'",new String[]{gameId});
+            db.delete("hidden_games","game_id=?",new String[]{gameId});
+            db.delete("games","id=? AND (source LIKE '%-manual' OR id LIKE 'manual:%')",new String[]{gameId});
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
 
     public String upsertAndroidGame(String pkg,String title,boolean installed){
