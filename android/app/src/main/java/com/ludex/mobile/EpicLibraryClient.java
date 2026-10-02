@@ -6,6 +6,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.*;
 
 public final class EpicLibraryClient {
     private static final String CLIENT_ID="34a02cf8f4414e29b15921876da36f9a";
@@ -29,6 +30,17 @@ public final class EpicLibraryClient {
             this.accountId=accountId==null?"":accountId;
             this.displayName=displayName==null?"":displayName;
             this.expiresAtMs=expiresAtMs;
+        }
+    }
+
+    public static final class CachedMetadata {
+        public final String appName,title,imageUrl,namespace,catalogItemId;
+        public CachedMetadata(String appName,String title,String imageUrl,String namespace,String catalogItemId){
+            this.appName=appName==null?"":appName;
+            this.title=title==null?"":title;
+            this.imageUrl=imageUrl==null?"":imageUrl;
+            this.namespace=namespace==null?"":namespace;
+            this.catalogItemId=catalogItemId==null?"":catalogItemId;
         }
     }
 
@@ -160,12 +172,17 @@ public final class EpicLibraryClient {
     }
 
     public static List<LibraryGame> getOwnedLibrary(Credentials credentials) throws Exception {
+        return getOwnedLibrary(credentials,Collections.emptyMap());
+    }
+
+    public static List<LibraryGame> getOwnedLibrary(Credentials credentials,Map<String,CachedMetadata> metadataCache) throws Exception {
         if(credentials==null||credentials.accessToken.isBlank()||credentials.accountId.isBlank()){
             throw new IllegalArgumentException("Sessão Epic inválida");
         }
 
         List<RawItem> raw=fetchLibrary(credentials.accessToken);
         Map<String,Long> playtime=fetchPlaytime(credentials.accessToken,credentials.accountId);
+        Map<String,CachedMetadata> cache=metadataCache==null?Collections.emptyMap():metadataCache;
 
         // A Library Service pode omitir alguns títulos instaláveis/legados. Para qualquer
         // artifact jogado que não apareceu nela, use os assets do Epic Games Launcher
@@ -188,57 +205,32 @@ public final class EpicLibraryClient {
         for(RawItem item:raw){
             long seconds=playtime.getOrDefault(item.appName,0L);
             if(seconds<=0||isReadableTitle(item.title))continue;
+            CachedMetadata cached=cache.get(item.appName.toLowerCase(Locale.ROOT));
+            if(cached!=null&&isReadableTitle(cached.title)
+                &&(item.catalogItemId.isBlank()||cached.catalogItemId.isBlank()||item.catalogItemId.equalsIgnoreCase(cached.catalogItemId))){
+                continue;
+            }
             if(!item.namespace.isBlank()&&!item.catalogItemId.isBlank()){
                 unresolvedByNamespace.computeIfAbsent(item.namespace,k->new ArrayList<>()).add(item);
             }
         }
 
         HashMap<String,JSONObject> resolvedCatalog=new HashMap<>();
-        for(List<RawItem> group:unresolvedByNamespace.values()){
-            for(int start=0;start<group.size();start+=50){
-                List<RawItem> chunk=group.subList(start,Math.min(start+50,group.size()));
-                JSONObject catalog=null;
-                try{catalog=fetchCatalog(credentials.accessToken,chunk,"BR","pt-BR");}catch(Exception ignored){}
-
-                ArrayList<RawItem> missing=new ArrayList<>();
-                for(RawItem item:chunk){
-                    JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
-                    if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
-                    else missing.add(item);
+        if(!unresolvedByNamespace.isEmpty()){
+            int workers=Math.min(4,unresolvedByNamespace.size());
+            ExecutorService catalogPool=Executors.newFixedThreadPool(workers);
+            try{
+                ArrayList<Future<Map<String,JSONObject>>> futures=new ArrayList<>();
+                for(List<RawItem> group:unresolvedByNamespace.values()){
+                    ArrayList<RawItem> copy=new ArrayList<>(group);
+                    futures.add(catalogPool.submit(()->resolveCatalogGroup(credentials.accessToken,copy,playtime)));
                 }
-
-                if(!missing.isEmpty()){
-                    try{
-                        JSONObject fallback=fetchCatalog(credentials.accessToken,missing,"US","en-US");
-                        ArrayList<RawItem> stillMissing=new ArrayList<>();
-                        for(RawItem item:missing){
-                            JSONObject data=fallback.optJSONObject(item.catalogItemId);
-                            if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
-                            else stillMissing.add(item);
-                        }
-
-                        // Último fallback: só os itens JOGADOS que ainda não resolveram.
-                        // Isso cobre jogos como Genshin/Cyberpunk sem voltar ao custo de
-                        // uma requisição individual para centenas de itens da biblioteca.
-                        for(RawItem item:stillMissing){
-                            if(playtime.getOrDefault(item.appName,0L)<=0)continue;
-                            try{
-                                JSONObject single=fetchCatalog(credentials.accessToken,Collections.singletonList(item),"US","en-US");
-                                JSONObject data=single.optJSONObject(item.catalogItemId);
-                                if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
-                            }catch(Exception ignored){}
-                        }
-                    }catch(Exception ignored){
-                        for(RawItem item:missing){
-                            if(playtime.getOrDefault(item.appName,0L)<=0)continue;
-                            try{
-                                JSONObject single=fetchCatalog(credentials.accessToken,Collections.singletonList(item),"US","en-US");
-                                JSONObject data=single.optJSONObject(item.catalogItemId);
-                                if(data!=null)resolvedCatalog.put(item.catalogItemId,data);
-                            }catch(Exception ignored2){}
-                        }
-                    }
+                for(Future<Map<String,JSONObject>> future:futures){
+                    try{resolvedCatalog.putAll(future.get());}
+                    catch(Exception ignored){}
                 }
+            }finally{
+                catalogPool.shutdownNow();
             }
         }
 
@@ -249,7 +241,9 @@ public final class EpicLibraryClient {
 
             if(data!=null&&(data.has("mainGameItem")||isEditorResource(data)))continue;
 
+            CachedMetadata cached=cache.get(item.appName.toLowerCase(Locale.ROOT));
             String title=item.title;
+            if(!isReadableTitle(title)&&cached!=null&&isReadableTitle(cached.title))title=cached.title;
             if(!isReadableTitle(title)&&data!=null)title=data.optString("title","").trim();
 
             // Nunca use appName/artifactId como título. Se não houver metadata,
@@ -257,6 +251,7 @@ public final class EpicLibraryClient {
             if(!isReadableTitle(title))title="";
 
             String image=item.imageUrl;
+            if(image.isBlank()&&cached!=null)image=cached.imageUrl;
             if(image.isBlank()&&data!=null)image=bestImage(data.optJSONArray("keyImages"));
             out.add(new LibraryGame(item.appName,item.namespace,item.catalogItemId,title,image,seconds,item.acquiredAtMs,item.launcherFallback));
         }
@@ -264,6 +259,43 @@ public final class EpicLibraryClient {
         LinkedHashMap<String,LibraryGame> unique=new LinkedHashMap<>();
         for(LibraryGame game:out)unique.put(game.appName,game);
         return new ArrayList<>(unique.values());
+    }
+
+    private static Map<String,JSONObject> resolveCatalogGroup(String accessToken,List<RawItem> group,Map<String,Long> playtime){
+        HashMap<String,JSONObject> out=new HashMap<>();
+        for(int start=0;start<group.size();start+=50){
+            List<RawItem> chunk=group.subList(start,Math.min(start+50,group.size()));
+            JSONObject catalog=null;
+            try{catalog=fetchCatalog(accessToken,chunk,"BR","pt-BR");}catch(Exception ignored){}
+
+            ArrayList<RawItem> missing=new ArrayList<>();
+            for(RawItem item:chunk){
+                JSONObject data=catalog==null?null:catalog.optJSONObject(item.catalogItemId);
+                if(data!=null)out.put(item.catalogItemId,data);
+                else missing.add(item);
+            }
+
+            if(missing.isEmpty())continue;
+            JSONObject fallback=null;
+            try{fallback=fetchCatalog(accessToken,missing,"US","en-US");}catch(Exception ignored){}
+            ArrayList<RawItem> stillMissing=new ArrayList<>();
+            for(RawItem item:missing){
+                JSONObject data=fallback==null?null:fallback.optJSONObject(item.catalogItemId);
+                if(data!=null)out.put(item.catalogItemId,data);
+                else stillMissing.add(item);
+            }
+
+            // Último fallback somente para artifacts realmente jogados.
+            for(RawItem item:stillMissing){
+                if(playtime.getOrDefault(item.appName,0L)<=0)continue;
+                try{
+                    JSONObject single=fetchCatalog(accessToken,Collections.singletonList(item),"US","en-US");
+                    JSONObject data=single.optJSONObject(item.catalogItemId);
+                    if(data!=null)out.put(item.catalogItemId,data);
+                }catch(Exception ignored){}
+            }
+        }
+        return out;
     }
 
     private static List<RawItem> fetchLibrary(String accessToken) throws Exception {
