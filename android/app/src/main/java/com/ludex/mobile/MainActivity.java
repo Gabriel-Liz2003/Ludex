@@ -631,6 +631,21 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void reloadLibraryAsync(){
+        io.execute(()->{
+            try{
+                final List<LudexDb.GameRow> games=db.listGames();
+                runOnUiThread(()->{
+                    gameAdapter.setAll(games);
+                    updateSummary(games);
+                    renderCurrent();
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha ao recarregar biblioteca: "+e.getMessage()));
+            }
+        });
+    }
+
     private void renderCurrent(){
         boolean sync=tab==Tab.SYNC;
         syncPanel.setVisibility(sync?View.VISIBLE:View.GONE);
@@ -1527,7 +1542,7 @@ public final class MainActivity extends AppCompatActivity {
                         if(result.familyError!=null&&!result.familyError.isBlank())msg+=" · Família falhou";
                         toast(msg);
                     }
-                    refreshAsync(false);
+                    reloadLibraryAsync();
                 });
             }catch(Exception e){
                 runOnUiThread(()->toast("Falha na Steam: "+e.getMessage()));
@@ -1628,7 +1643,7 @@ public final class MainActivity extends AppCompatActivity {
                         if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" artifacts legados ignorados";
                         toast(msg);
                     }
-                    refreshAsync(false);
+                    reloadLibraryAsync();
                 });
             }catch(Exception e){
                 String message=e.getMessage()==null?"erro desconhecido":e.getMessage();
@@ -1844,7 +1859,7 @@ public final class MainActivity extends AppCompatActivity {
                 runOnUiThread(()->{
                     updateNintendoSyncInfo();
                     if(notify)toast(count+" jogos da Conta Nintendo sincronizados");
-                    refreshAsync(false);
+                    reloadLibraryAsync();
                 });
             }catch(Exception e){
                 String msg=e.getMessage()==null?"erro desconhecido":e.getMessage();
