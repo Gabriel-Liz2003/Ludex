@@ -322,9 +322,21 @@ public final class LudexDb extends SQLiteOpenHelper {
                 gu.put("source",item.familyShared?"steam-family":"steam");gu.put("updated_at",now);
                 db.update("games",gu,"id=?",new String[]{gameId});
 
+                long previousAcquired=0,previousLastPlayed=0;
+                try(Cursor cur=db.rawQuery(
+                    "SELECT acquired_at,last_played_at FROM steam_games WHERE app_id=? LIMIT 1",
+                    new String[]{item.appId})){
+                    if(cur.moveToFirst()){
+                        previousAcquired=Math.max(0,cur.getLong(0));
+                        previousLastPlayed=Math.max(0,cur.getLong(1));
+                    }
+                }
+
                 ContentValues s=new ContentValues();
                 s.put("game_id",gameId);s.put("app_id",item.appId);s.put("family_shared",item.familyShared?1:0);
-                s.put("acquired_at",Math.max(0,item.acquiredAtMs));s.put("last_played_at",Math.max(0,item.lastPlayedAtMs));s.put("updated_at",now);
+                long acquired=item.acquiredAtMs>0?item.acquiredAtMs:previousAcquired;
+                long lastPlayed=Math.max(previousLastPlayed,Math.max(0,item.lastPlayedAtMs));
+                s.put("acquired_at",acquired);s.put("last_played_at",lastPlayed);s.put("updated_at",now);
                 db.insertWithOnConflict("steam_games",null,s,SQLiteDatabase.CONFLICT_REPLACE);
 
                 ContentValues p=new ContentValues();
