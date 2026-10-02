@@ -80,6 +80,8 @@ public final class MainActivity extends AppCompatActivity {
     private boolean shizukuBinderReady;
     private boolean sortByPlaytime;
     private LibraryFilter libraryFilter=LibraryFilter.ALL;
+    private String pendingManualArtworkUri="";
+    private TextView pendingManualArtworkInfo;
     private static final int SHIZUKU_GAMENATIVE_REQUEST=4201;
     private static final int SHIZUKU_EDEN_REQUEST=4202;
 
@@ -163,6 +165,15 @@ public final class MainActivity extends AppCompatActivity {
             db.setSetting("emulator.tree_uri."+pkg,uri.toString());
             EmulatorRegistry.Emulator e=EmulatorRegistry.get(pkg);
             if(e!=null)syncGenericEmulatorLibrary(uri,e,true);
+        });
+
+    private final ActivityResultLauncher<String[]> manualArtworkLauncher=registerForActivityResult(
+        new ActivityResultContracts.OpenDocument(), uri -> {
+            if(uri==null)return;
+            try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+            catch(Exception ignored){}
+            pendingManualArtworkUri=uri.toString();
+            if(pendingManualArtworkInfo!=null)pendingManualArtworkInfo.setText("Capa selecionada");
         });
 
     private final ActivityResultLauncher<Intent> importLauncher=registerForActivityResult(
@@ -278,6 +289,7 @@ public final class MainActivity extends AppCompatActivity {
             renderCurrent();
         });
         findViewById(R.id.library_filter).setOnClickListener(v->showLibraryFilter());
+        findViewById(R.id.manual_add).setOnClickListener(v->showManualGameDialog(null));
         findViewById(R.id.usage_access).setOnClickListener(v->openUsageAccess());
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
@@ -303,6 +315,127 @@ public final class MainActivity extends AppCompatActivity {
             renderCurrent();
             return true;
         });
+    }
+
+    private static final String[] MANUAL_PLATFORM_LABELS={"Nintendo Switch","PC","Xbox","PlayStation","Outro"};
+    private static final String[] MANUAL_PLATFORM_KEYS={"nintendo","pc","xbox","playstation","other"};
+
+    private static int manualPlatformIndex(String key){
+        if(key==null)return 0;
+        for(int i=0;i<MANUAL_PLATFORM_KEYS.length;i++)if(MANUAL_PLATFORM_KEYS[i].equalsIgnoreCase(key))return i;
+        return 0;
+    }
+
+    private void showManualGameDialog(LudexDb.GameRow existing){
+        LudexDb.ManualInfo existingInfo=existing==null?null:db.getManualInfo(existing.id);
+        pendingManualArtworkUri=existingInfo==null?"":existingInfo.imageUri;
+
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,8,pad,0);
+
+        EditText title=new EditText(this);
+        title.setHint("Nome do jogo");
+        title.setSingleLine(true);
+        if(existing!=null)title.setText(existing.title);
+        wrap.addView(title,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView platformLabel=new TextView(this);
+        platformLabel.setText("Plataforma");
+        platformLabel.setTextColor(getColor(R.color.ludex_muted));
+        platformLabel.setPadding(0,pad/2,0,0);
+        wrap.addView(platformLabel);
+
+        Spinner platform=new Spinner(this);
+        ArrayAdapter<String> platformAdapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,MANUAL_PLATFORM_LABELS);
+        platformAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        platform.setAdapter(platformAdapter);
+        platform.setSelection(manualPlatformIndex(existingInfo==null?null:existingInfo.platformKey));
+        wrap.addView(platform,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText hours=new EditText(this);
+        hours.setHint("Horas jogadas (ex.: 24,5)");
+        hours.setSingleLine(true);
+        hours.setInputType(android.text.InputType.TYPE_CLASS_NUMBER|android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        if(existing!=null)hours.setText(String.format(Locale.ROOT,"%.2f",existing.seconds/3600.0).replaceAll("0+$","").replaceAll("\\.$",""));
+        wrap.addView(hours,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText firstPlayed=new EditText(this);
+        firstPlayed.setHint("Primeira vez jogado (dd/MM/aaaa) · opcional");
+        firstPlayed.setSingleLine(true);
+        long firstAt=existingInfo==null?0:existingInfo.firstPlayedAt;
+        if(firstAt<=0&&existing!=null)firstAt=existing.firstActivityAt;
+        if(firstAt>0)firstPlayed.setText(formatDate(firstAt));
+        wrap.addView(firstPlayed,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        com.google.android.material.button.MaterialButton cover=new com.google.android.material.button.MaterialButton(this);
+        cover.setText(pendingManualArtworkUri.isBlank()?"Escolher capa (opcional)":"Trocar capa");
+        cover.setOnClickListener(v->manualArtworkLauncher.launch(new String[]{"image/*"}));
+        LinearLayout.LayoutParams coverParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT);
+        coverParams.topMargin=pad/2;
+        wrap.addView(cover,coverParams);
+
+        pendingManualArtworkInfo=new TextView(this);
+        pendingManualArtworkInfo.setText(pendingManualArtworkUri.isBlank()?"Nenhuma capa selecionada":"Capa selecionada");
+        pendingManualArtworkInfo.setTextColor(getColor(R.color.ludex_muted));
+        pendingManualArtworkInfo.setTextSize(12);
+        wrap.addView(pendingManualArtworkInfo,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView note=new TextView(this);
+        note.setText("Entradas manuais participam da deduplicação. Um jogo de Switch manual, por exemplo, soma suas horas com Steam/Epic do mesmo título.");
+        note.setTextColor(getColor(R.color.ludex_muted));
+        note.setTextSize(12);
+        note.setPadding(0,pad/2,0,0);
+        wrap.addView(note,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle(existing==null?"Adicionar jogo manualmente":"Editar entrada manual")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Salvar",null)
+            .create();
+
+        dialog.setOnShowListener(ignored->dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String gameTitle=title.getText()==null?"":title.getText().toString().trim();
+            if(gameTitle.isBlank()){title.setError("Informe o nome do jogo");return;}
+
+            String rawHours=hours.getText()==null?"":hours.getText().toString().trim().replace(',','.');
+            double totalHours;
+            try{totalHours=Double.parseDouble(rawHours);}
+            catch(Exception e){hours.setError("Informe as horas jogadas");return;}
+            if(totalHours<=0){hours.setError("Use um valor maior que zero");return;}
+            long seconds=Math.max(60,Math.round(totalHours*3600.0));
+
+            long firstPlayedAt=0;
+            String dateText=firstPlayed.getText()==null?"":firstPlayed.getText().toString().trim();
+            if(!dateText.isBlank()){
+                try{
+                    java.text.SimpleDateFormat fmt=new java.text.SimpleDateFormat("dd/MM/yyyy",Locale.getDefault());
+                    fmt.setLenient(false);
+                    java.util.Date parsed=fmt.parse(dateText);
+                    if(parsed!=null)firstPlayedAt=parsed.getTime();
+                }catch(Exception e){firstPlayed.setError("Use dd/MM/aaaa");return;}
+            }
+
+            int platformIndex=Math.max(0,platform.getSelectedItemPosition());
+            String platformName=MANUAL_PLATFORM_LABELS[platformIndex];
+            String platformKey=MANUAL_PLATFORM_KEYS[platformIndex];
+
+            try{
+                if(existing==null)db.addManualGame(gameTitle,platformName,platformKey,seconds,firstPlayedAt,pendingManualArtworkUri);
+                else db.updateManualGame(existing.id,gameTitle,platformName,platformKey,seconds,firstPlayedAt,pendingManualArtworkUri);
+                dialog.dismiss();
+                pendingManualArtworkInfo=null;
+                pendingManualArtworkUri="";
+                refreshAsync(false);
+                toast(existing==null?"Jogo adicionado":"Entrada manual atualizada");
+            }catch(Exception e){
+                toast("Não foi possível salvar: "+e.getMessage());
+            }
+        }));
+        dialog.setOnDismissListener(ignored->pendingManualArtworkInfo=null);
+        dialog.show();
     }
 
     private void updateSortButton(){
