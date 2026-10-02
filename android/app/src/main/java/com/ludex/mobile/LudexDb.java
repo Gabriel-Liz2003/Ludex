@@ -441,6 +441,21 @@ public final class LudexDb extends SQLiteOpenHelper {
         return count;
     }
 
+    public Map<String,EpicLibraryClient.CachedMetadata> getEpicMetadataCache(){
+        LinkedHashMap<String,EpicLibraryClient.CachedMetadata> out=new LinkedHashMap<>();
+        String sql="SELECT e.app_name,g.title,e.image_url,e.namespace,e.catalog_item_id FROM epic_games e JOIN games g ON g.id=e.game_id";
+        try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
+            while(c.moveToNext()){
+                String appName=c.getString(0);
+                if(appName==null||appName.isBlank())continue;
+                out.put(appName.toLowerCase(Locale.ROOT),new EpicLibraryClient.CachedMetadata(
+                    appName,c.getString(1),c.getString(2),c.getString(3),c.getString(4)
+                ));
+            }
+        }
+        return out;
+    }
+
     public EpicInfo getEpicInfo(String gameId){
         try(Cursor c=getReadableDatabase().rawQuery(
             "SELECT app_name,namespace,catalog_item_id,image_url FROM epic_games WHERE game_id=? LIMIT 1",

@@ -47,8 +47,7 @@ public final class EpicArtworkLoader {
 
     private static Bitmap decode(File file){
         if(file==null||!file.isFile()||file.length()==0)return null;
-        try{return BitmapFactory.decodeFile(file.getAbsolutePath());}
-        catch(Exception e){return null;}
+        return ArtworkBitmap.decode(file);
     }
 
     private static String safe(String value){
