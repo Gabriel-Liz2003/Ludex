@@ -1561,7 +1561,7 @@ public final class MainActivity extends AppCompatActivity {
         String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
         String who=name.isBlank()?"Conta Epic conectada":"Epic conectada · "+name;
         long unresolved=db.getSettingLong("epic.last_unresolved_played_count",0);
-        String unresolvedInfo=unresolved>0?" · "+unresolved+" artifacts legados sem metadata":"";
+        String unresolvedInfo=unresolved>0?" · "+unresolved+" artifacts com horas sem metadata":"";
         epicSyncInfo.setText(who+suffix+unresolvedInfo);
     }
 
@@ -1640,7 +1640,7 @@ public final class MainActivity extends AppCompatActivity {
                     if(notify){
                         String msg=result.total+" jogos Epic sincronizados · "+result.played+" com horas";
                         if(result.recoveredFromLauncher>0)msg+=" · "+result.recoveredFromLauncher+" recuperados via Launcher";
-                        if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" artifacts legados ignorados";
+                        if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" artifacts com horas sem metadata";
                         toast(msg);
                     }
                     reloadLibraryAsync();
