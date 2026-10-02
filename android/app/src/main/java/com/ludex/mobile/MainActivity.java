@@ -69,6 +69,15 @@ public final class MainActivity extends AppCompatActivity {
     private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, nintendoSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
+    private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(3);
+    private final ExecutorService artworkIo=Executors.newFixedThreadPool(4);
+    private final android.util.LruCache<String,android.graphics.Bitmap> artworkMemory=
+        new android.util.LruCache<String,android.graphics.Bitmap>(24*1024){
+            @Override protected int sizeOf(String key,android.graphics.Bitmap value){
+                try{return Math.max(1,value.getAllocationByteCount()/1024);}
+                catch(Exception e){return Math.max(1,value.getByteCount()/1024);}
+            }
+        };
     private String pendingEmulatorPackage;
     private String pendingEdenPackage;
     private String pendingLibraryEmulatorPackage;
@@ -252,7 +261,11 @@ public final class MainActivity extends AppCompatActivity {
         Shizuku.removeBinderReceivedListener(shizukuBinderReceivedListener);
         Shizuku.removeBinderDeadListener(shizukuBinderDeadListener);
         Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
-        super.onDestroy();io.shutdownNow();
+        super.onDestroy();
+        io.shutdownNow();
+        remoteSyncIo.shutdownNow();
+        artworkIo.shutdownNow();
+        artworkMemory.evictAll();
     }
 
     private void bindViews(){
@@ -474,8 +487,8 @@ public final class MainActivity extends AppCompatActivity {
         refresh.setEnabled(false);
         toast("Atualizando biblioteca e horas…");
         io.execute(()->{
-            ArrayList<String> updated=new ArrayList<>();
-            ArrayList<String> failed=new ArrayList<>();
+            List<String> updated=Collections.synchronizedList(new ArrayList<>());
+            List<String> failed=Collections.synchronizedList(new ArrayList<>());
             try{
                 scanInstalledGames();
 
@@ -510,24 +523,47 @@ public final class MainActivity extends AppCompatActivity {
                     }
                 }
 
+                ArrayList<Future<?>> remoteTasks=new ArrayList<>();
+
                 String steamId=db.getSetting("steam.id64","");
                 String steamKey=SecretStore.get(this,"steam.api_key");
                 String steamFamilyToken=SecretStore.get(this,"steam.family_token");
                 if(!steamId.isEmpty()&&(!steamKey.isEmpty()||!steamFamilyToken.isEmpty())){
-                    try{
-                        SteamSyncResult steamResult=syncSteamLibraryNow(steamId,steamKey,steamFamilyToken);
-                        updated.add(steamResult.familyGames>0?"Steam + Família":"Steam");
-                        if(steamResult.familyError!=null&&!steamResult.familyError.isBlank())failed.add("Família Steam");
-                    }catch(Exception e){failed.add("Steam");}
+                    remoteTasks.add(remoteSyncIo.submit(()->{
+                        try{
+                            SteamSyncResult steamResult=syncSteamLibraryNow(steamId,steamKey,steamFamilyToken);
+                            updated.add(steamResult.familyGames>0?"Steam + Família":"Steam");
+                            if(steamResult.familyError!=null&&!steamResult.familyError.isBlank())failed.add("Família Steam");
+                        }catch(Exception e){failed.add("Steam");}
+                    }));
                 }
 
                 if(!SecretStore.get(this,"epic.refresh_token").isEmpty()){
-                    try{
-                        syncEpicLibraryNow();
-                        updated.add("Epic");
-                    }catch(Exception e){failed.add("Epic");}
+                    remoteTasks.add(remoteSyncIo.submit(()->{
+                        try{
+                            syncEpicLibraryNow();
+                            updated.add("Epic");
+                        }catch(Exception e){failed.add("Epic");}
+                    }));
                 }
 
+                String nintendoSession=SecretStore.get(this,"nintendo.session_token");
+                if(!nintendoSession.isEmpty()){
+                    remoteTasks.add(remoteSyncIo.submit(()->{
+                        try{
+                            syncNintendoPlaytimeNow(nintendoSession);
+                            updated.add("Nintendo");
+                        }catch(Exception e){
+                            String msg=e.getMessage()==null?"":e.getMessage();
+                            if(msg.contains("401")||msg.contains("403")||msg.contains("invalid_grant")){
+                                SecretStore.remove(this,"nintendo.session_token");
+                            }
+                            failed.add("Nintendo");
+                        }
+                    }));
+                }
+
+                // Eden é local/Shizuku: execute enquanto as APIs remotas trabalham em paralelo.
                 if(Shizuku.pingBinder()){
                     int edenMatched=0;
                     edenMatched+=importEdenPlaytime(EdenShortcutScanner.STANDARD_PACKAGE);
@@ -535,18 +571,9 @@ public final class MainActivity extends AppCompatActivity {
                     if(edenMatched>0)updated.add("Eden");
                 }
 
-                String nintendoSession=SecretStore.get(this,"nintendo.session_token");
-                if(!nintendoSession.isEmpty()){
-                    try{
-                        syncNintendoPlaytimeNow(nintendoSession);
-                        updated.add("Nintendo");
-                    }catch(Exception e){
-                        String msg=e.getMessage()==null?"":e.getMessage();
-                        if(msg.contains("401")||msg.contains("403")||msg.contains("invalid_grant")){
-                            SecretStore.remove(this,"nintendo.session_token");
-                        }
-                        failed.add("Nintendo");
-                    }
+                for(Future<?> task:remoteTasks){
+                    try{task.get();}
+                    catch(Exception ignored){}
                 }
 
                 final List<LudexDb.GameRow> games=db.listGames();
@@ -1518,7 +1545,9 @@ public final class MainActivity extends AppCompatActivity {
         String name=db.getSetting("epic.display_name","");
         String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
         String who=name.isBlank()?"Conta Epic conectada":"Epic conectada · "+name;
-        epicSyncInfo.setText(who+suffix);
+        long unresolved=db.getSettingLong("epic.last_unresolved_played_count",0);
+        String unresolvedInfo=unresolved>0?" · "+unresolved+" artifacts legados sem metadata":"";
+        epicSyncInfo.setText(who+suffix+unresolvedInfo);
     }
 
     private void saveEpicCredentials(EpicLibraryClient.Credentials credentials) throws Exception {
@@ -1564,7 +1593,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private EpicSyncResult syncEpicLibraryNow() throws Exception {
         EpicLibraryClient.Credentials credentials=validEpicCredentials();
-        List<EpicLibraryClient.LibraryGame> library=EpicLibraryClient.getOwnedLibrary(credentials);
+        List<EpicLibraryClient.LibraryGame> library=EpicLibraryClient.getOwnedLibrary(credentials,db.getEpicMetadataCache());
         int played=0,unresolvedPlayed=0,recoveredFromLauncher=0;
         for(EpicLibraryClient.LibraryGame game:library){
             if(game.seconds>0){
@@ -1596,7 +1625,7 @@ public final class MainActivity extends AppCompatActivity {
                     if(notify){
                         String msg=result.total+" jogos Epic sincronizados · "+result.played+" com horas";
                         if(result.recoveredFromLauncher>0)msg+=" · "+result.recoveredFromLauncher+" recuperados via Launcher";
-                        if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" sem título resolvido";
+                        if(result.unresolvedPlayed>0)msg+=" · "+result.unresolvedPlayed+" artifacts legados ignorados";
                         toast(msg);
                     }
                     refreshAsync(false);
