@@ -721,7 +721,7 @@ public final class LudexDb extends SQLiteOpenHelper {
 
     public JSONObject exportBundle() throws JSONException {
         JSONObject root=new JSONObject();root.put("format","ludex-mobile-sync");root.put("version",1);root.put("exported_at_ms",System.currentTimeMillis());
-        root.put("games",gamesJson());root.put("sessions",sessionsJson());root.put("imported_playtime",importedPlaytimeJson());
+        root.put("games",gamesJson());root.put("sessions",sessionsJson());root.put("imported_playtime",importedPlaytimeJson());root.put("manual_games",manualGamesJson());
         return root;
     }
     private JSONArray gamesJson() throws JSONException {
@@ -730,6 +730,19 @@ public final class LudexDb extends SQLiteOpenHelper {
     private JSONArray sessionsJson() throws JSONException {
         JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,game_id,package_name,started_at,ended_at,duration_seconds,device,provider FROM play_sessions",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("game_id",c.getString(1));if(!c.isNull(2))o.put("package_name",c.getString(2));o.put("started_at_ms",c.getLong(3));o.put("ended_at_ms",c.getLong(4));o.put("duration_seconds",c.getLong(5));o.put("device",c.getString(6));o.put("provider",c.getString(7));a.put(o);}}return a;
     }
+    private JSONArray manualGamesJson() throws JSONException {
+        JSONArray a=new JSONArray();
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,platform_key,image_uri,first_played_at,updated_at FROM manual_games",null)){
+            while(c.moveToNext()){
+                JSONObject o=new JSONObject();
+                o.put("game_id",c.getString(0));o.put("platform_key",c.getString(1));
+                o.put("image_uri",c.getString(2));o.put("first_played_at_ms",c.getLong(3));o.put("updated_at_ms",c.getLong(4));
+                a.put(o);
+            }
+        }
+        return a;
+    }
+
     private JSONArray importedPlaytimeJson() throws JSONException {
         JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,provider,seconds,updated_at FROM imported_playtime",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("game_id",c.getString(0));o.put("provider",c.getString(1));o.put("seconds",c.getLong(2));o.put("updated_at_ms",c.getLong(3));a.put(o);}}return a;
     }
@@ -743,6 +756,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             JSONArray gs=data.optJSONArray("games");if(gs!=null)for(int i=0;i<gs.length();i++)importGame(db,gs.getJSONObject(i),result);
             JSONArray ss=data.optJSONArray("sessions");if(ss!=null)for(int i=0;i<ss.length();i++)importSession(db,ss.getJSONObject(i));
             JSONArray ip=data.optJSONArray("imported_playtime");if(ip!=null)for(int i=0;i<ip.length();i++)importPlaytime(db,ip.getJSONObject(i));
+            JSONArray mg=data.optJSONArray("manual_games");if(mg!=null)for(int i=0;i<mg.length();i++)importManualGame(db,mg.getJSONObject(i));
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         return result;
@@ -773,6 +787,20 @@ public final class LudexDb extends SQLiteOpenHelper {
         long start=parseTime(s,"started_at","started_at_ms"),end=parseTime(s,"ended_at","ended_at_ms");if(start<=0||end<start)return;
         ContentValues v=new ContentValues();v.put("id",id);v.put("game_id",game);if(s.has("package_name"))v.put("package_name",s.optString("package_name",null));v.put("started_at",start);v.put("ended_at",end);v.put("duration_seconds",s.optLong("duration_seconds",Math.max(0,(end-start)/1000)));v.put("device",s.optString("device","sync"));v.put("provider",s.optString("provider","sync"));db.insertWithOnConflict("play_sessions",null,v,SQLiteDatabase.CONFLICT_IGNORE);
     }
+    private void importManualGame(SQLiteDatabase db,JSONObject x){
+        String gameId=x.optString("game_id","");
+        if(gameId.isBlank())return;
+        try(Cursor exists=db.rawQuery("SELECT 1 FROM games WHERE id=? LIMIT 1",new String[]{gameId})){
+            if(!exists.moveToFirst())return;
+        }
+        ContentValues v=new ContentValues();
+        v.put("game_id",gameId);v.put("platform_key",x.optString("platform_key","other"));
+        v.put("image_uri",x.optString("image_uri",""));
+        v.put("first_played_at",Math.max(0,x.optLong("first_played_at_ms",0)));
+        v.put("updated_at",Math.max(System.currentTimeMillis(),x.optLong("updated_at_ms",0)));
+        db.insertWithOnConflict("manual_games",null,v,SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
     private void importPlaytime(SQLiteDatabase db,JSONObject x){
         String game=x.optString("game_id"),provider=x.optString("provider");if(game.isEmpty()||provider.isEmpty())return;long seconds=Math.max(0,x.optLong("seconds"));long updated=parseTime(x,"updated_at","updated_at_ms");
         ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",updated>0?updated:System.currentTimeMillis());db.insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);db.execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=MAX(updated_at,?) WHERE game_id=? AND provider=?",new Object[]{seconds,updated,game,provider});
