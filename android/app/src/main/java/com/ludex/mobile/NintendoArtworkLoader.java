@@ -37,7 +37,7 @@ public final class NintendoArtworkLoader {
 
     private static Bitmap decode(File f){
         if(f==null||!f.isFile()||f.length()==0)return null;
-        try{return BitmapFactory.decodeFile(f.getAbsolutePath());}catch(Exception e){return null;}
+        return ArtworkBitmap.decode(f);
     }
 
     private static String safe(String s){return s==null?"unknown":s.replaceAll("[^A-Za-z0-9._-]","_");}
