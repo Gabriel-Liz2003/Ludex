@@ -97,7 +97,7 @@ public final class EmulatedArtworkLoader {
 
     private static Bitmap decode(File f){
         if(f==null||!f.isFile()||f.length()==0)return null;
-        try{return BitmapFactory.decodeFile(f.getAbsolutePath());}catch(Exception e){return null;}
+        return ArtworkBitmap.decode(f);
     }
 
     private static String path(String s){
