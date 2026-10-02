@@ -1502,7 +1502,7 @@ public final class MainActivity extends AppCompatActivity {
                 SteamPlaytimeClient.FamilyLibrary family=SteamPlaytimeClient.getFamilyLibrary(familyToken,steamId);
                 db.setSetting("steam.family_group_id",family.familyGroupId);
                 for(SteamPlaytimeClient.LibraryGame game:family.games){
-                    merged.put(game.appId,game);
+                    merged.put(game.appId,SteamPlaytimeClient.mergePreferOwned(merged.get(game.appId),game));
                     if(game.familyShared)familyGames++;
                 }
             }catch(Exception e){
@@ -1513,7 +1513,9 @@ public final class MainActivity extends AppCompatActivity {
 
         if(key!=null&&!key.isEmpty()){
             List<SteamPlaytimeClient.LibraryGame> owned=SteamPlaytimeClient.getOwnedLibrary(key,steamId);
-            for(SteamPlaytimeClient.LibraryGame game:owned)merged.put(game.appId,game);
+            for(SteamPlaytimeClient.LibraryGame game:owned){
+                merged.put(game.appId,SteamPlaytimeClient.mergePreferOwned(merged.get(game.appId),game));
+            }
         }
 
         int imported=db.syncSteamLibrary(new ArrayList<>(merged.values()));
