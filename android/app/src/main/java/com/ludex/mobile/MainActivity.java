@@ -1397,8 +1397,20 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
-        String family=hasFamily?" · Família Steam ativa":"";
+        String familyError=db.getSetting("steam.family_last_error","");
+        String family="";
+        if(hasFamily){
+            if(familyError.isBlank())family=" · Família Steam ativa";
+            else if(isSteamFamilyAuthError(familyError))family=" · Família Steam: token expirado";
+            else family=" · Família Steam com erro";
+        }
         steamSyncInfo.setText("Steam configurada · "+steamId+family+suffix);
+    }
+
+    private static boolean isSteamFamilyAuthError(String error){
+        if(error==null)return false;
+        String x=error.toLowerCase(Locale.ROOT);
+        return x.contains("http 401")||x.contains("http 403")||x.contains("unauthorized")||x.contains("forbidden")||x.contains("invalid token");
     }
 
     private void showSteamConfig(){
@@ -1478,6 +1490,7 @@ public final class MainActivity extends AppCompatActivity {
                     if(!familyRaw.isEmpty()){
                         String clean=SteamPlaytimeClient.extractAccessToken(familyRaw);
                         SecretStore.put(this,"steam.family_token",clean);
+                        db.setSetting("steam.family_last_error","");
                     }
                     updateSteamSyncInfo();
                     toast("Steam configurada");
@@ -1503,12 +1516,14 @@ public final class MainActivity extends AppCompatActivity {
             try{
                 SteamPlaytimeClient.FamilyLibrary family=SteamPlaytimeClient.getFamilyLibrary(familyToken,steamId);
                 db.setSetting("steam.family_group_id",family.familyGroupId);
+                db.setSetting("steam.family_last_error","");
                 for(SteamPlaytimeClient.LibraryGame game:family.games){
                     merged.put(game.appId,SteamPlaytimeClient.mergePreferOwned(merged.get(game.appId),game));
                     if(game.familyShared)familyGames++;
                 }
             }catch(Exception e){
                 familyError=e.getMessage()==null?"Falha na Família Steam":e.getMessage();
+                db.setSetting("steam.family_last_error",familyError);
                 if(key==null||key.isEmpty())throw e;
             }
         }
@@ -1544,7 +1559,13 @@ public final class MainActivity extends AppCompatActivity {
                     if(notify){
                         String msg=result.total+" jogos Steam sincronizados";
                         if(result.familyGames>0)msg+=" · "+result.familyGames+" da família";
-                        if(result.familyError!=null&&!result.familyError.isBlank())msg+=" · Família falhou";
+                        if(result.familyError!=null&&!result.familyError.isBlank()){
+                            if(isSteamFamilyAuthError(result.familyError)){
+                                msg+=" · token da Família expirou; renove em Configurar Steam";
+                            }else{
+                                msg+=" · Família falhou: "+result.familyError;
+                            }
+                        }
                         toast(msg);
                     }
                     reloadLibraryAsync();
