@@ -880,24 +880,37 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean rowHasPlaytimeForFilter(LudexDb.GameRow row,LibraryFilter filter){
+    private long rowPlaytimeForFilter(LudexDb.GameRow row,LibraryFilter filter){
         switch(filter){
-            case ALL:return row.seconds>0;
-            case ANDROID:return row.androidSeconds>0;
-            case STEAM:return row.steamSeconds>0;
-            case NINTENDO:return row.nintendoSeconds>0;
-            case EMULATED:return row.emulatedSeconds>0;
-            case EPIC:return row.epicSeconds>0;
-            case GOG:return row.otherSeconds>0&&"gog".equals(sourceKey(row));
+            case ALL:return Math.max(0,row.seconds);
+            case ANDROID:return Math.max(0,row.androidSeconds);
+            case STEAM:return Math.max(0,row.steamSeconds);
+            case NINTENDO:return Math.max(0,row.nintendoSeconds);
+            case EMULATED:return Math.max(0,row.emulatedSeconds);
+            case EPIC:return Math.max(0,row.epicSeconds);
+            case GOG:return "gog".equals(sourceKey(row))?Math.max(0,row.otherSeconds):0;
             case XBOX:{
                 String source=sourceKey(row);
-                return row.otherSeconds>0&&("xbox".equals(source)||"microsoft".equals(source));
+                return ("xbox".equals(source)||"microsoft".equals(source))?Math.max(0,row.otherSeconds):0;
             }
             case OTHER:
-                return row.otherSeconds>0&&!rowMatchesLibrary(row,LibraryFilter.EPIC)
-                    &&!rowMatchesLibrary(row,LibraryFilter.GOG)&&!rowMatchesLibrary(row,LibraryFilter.XBOX);
-            default:return false;
+                return !rowMatchesLibrary(row,LibraryFilter.EPIC)
+                    &&!rowMatchesLibrary(row,LibraryFilter.GOG)
+                    &&!rowMatchesLibrary(row,LibraryFilter.XBOX)
+                    ?Math.max(0,row.otherSeconds):0;
+            default:return 0;
         }
+    }
+
+    private boolean rowHasPlaytimeForFilter(LudexDb.GameRow row,LibraryFilter filter){
+        return rowPlaytimeForFilter(row,filter)>0;
+    }
+
+    private long displayPlaytime(DisplayGame game){
+        if(libraryFilter==LibraryFilter.ALL)return Math.max(0,game.seconds);
+        long total=0;
+        for(LudexDb.GameRow row:game.variants)total+=rowPlaytimeForFilter(row,libraryFilter);
+        return total;
     }
 
     private boolean groupMatchesLibrary(DisplayGame game,LibraryFilter filter){
@@ -1024,7 +1037,14 @@ public final class MainActivity extends AppCompatActivity {
     private void showGame(DisplayGame game){
         LudexDb.GameRow launch=launchVariant(game);
         String breakdown=playtimeBreakdown(game);
-        String message=librariesLabel(game)+"\nTotal: "+format(game.seconds);
+        long visibleSeconds=displayPlaytime(game);
+        String message=librariesLabel(game);
+        if(libraryFilter==LibraryFilter.ALL){
+            message+="\nTotal: "+format(game.seconds);
+        }else{
+            message+="\n"+libraryFilter.label+": "+format(visibleSeconds);
+            if(game.seconds!=visibleSeconds)message+="\nTotal geral: "+format(game.seconds);
+        }
         String date=gameDateLabel(game);
         if(!date.isBlank())message+="\n"+date;
         if(!breakdown.isBlank())message+="\n\n"+breakdown;
@@ -2193,7 +2213,7 @@ public final class MainActivity extends AppCompatActivity {
                 shown.add(g);
             }
             if(sortByPlaytime){
-                shown.sort(Comparator.comparingLong((DisplayGame g)->g.seconds).reversed()
+                shown.sort(Comparator.comparingLong((DisplayGame g)->displayPlaytime(g)).reversed()
                     .thenComparing(g->g.title,String.CASE_INSENSITIVE_ORDER));
             }else{
                 shown.sort(Comparator.comparing(g->g.title,String.CASE_INSENSITIVE_ORDER));
@@ -2210,7 +2230,7 @@ public final class MainActivity extends AppCompatActivity {
             String date=gameDateLabel(g);
             h.date.setText(date);
             h.date.setVisibility(date.isBlank()?View.GONE:View.VISIBLE);
-            h.time.setText(format(g.seconds));
+            h.time.setText(format(displayPlaytime(g)));
             h.status.setText(g.favorite?"★ "+g.status:g.status);
             if(artwork!=null)bindGameArtwork(artwork,h.icon);
             else h.icon.setVisibility(View.INVISIBLE);
