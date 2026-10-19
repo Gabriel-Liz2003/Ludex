@@ -232,21 +232,26 @@ public final class LudexDb extends SQLiteOpenHelper {
             "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND (lower(p.provider) LIKE 'eden%' OR lower(p.provider) LIKE 'emulator%')),0),"+
             "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) LIKE 'epic%'),0),"+
             "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'epic%'),0),"+
-            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%' AND lower(s.provider) NOT LIKE 'epic%'),0),"+
-            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%' AND lower(p.provider) NOT LIKE 'epic%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND (lower(s.provider) LIKE 'playstation%' OR lower(s.provider) LIKE 'psn%')),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND (lower(p.provider) LIKE 'playstation%' OR lower(p.provider) LIKE 'psn%')),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%' AND lower(s.provider) NOT LIKE 'epic%' AND lower(s.provider) NOT LIKE 'playstation%' AND lower(s.provider) NOT LIKE 'psn%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%' AND lower(p.provider) NOT LIKE 'epic%' AND lower(p.provider) NOT LIKE 'playstation%' AND lower(p.provider) NOT LIKE 'psn%'),0),"+
             "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id),"+
             "CASE WHEN lower(g.source) IN ('steam','steam-family') OR EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='steam') THEN 1 ELSE 0 END,"+
-            "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
+            "CASE WHEN lower(g.source)='nintendo' OR lower(g.source)='nintendo-manual' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
             "CASE WHEN lower(g.source)='epic' OR EXISTS(SELECT 1 FROM epic_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='epic') THEN 1 ELSE 0 END,"+
+            "CASE WHEN lower(g.source) IN ('psn','playstation-manual') OR EXISTS(SELECT 1 FROM psn_games pg WHERE pg.game_id=g.id) THEN 1 ELSE 0 END,"+
             "COALESCE((SELECT lower(gn.provider) FROM gamenative_games gn WHERE gn.game_id=g.id LIMIT 1),''),"+
             "g.first_seen_at,g.first_opened_at,"+
             "COALESCE((SELECT MIN(started_at) FROM play_sessions ps WHERE ps.game_id=g.id),0),"+
             "COALESCE((SELECT first_played_at FROM nintendo_games ng WHERE ng.game_id=g.id LIMIT 1),''),"+
             "COALESCE((SELECT acquisition_at FROM epic_games eg WHERE eg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT acquired_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
-            "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0) "+
+            "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT first_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT last_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0) "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
             while(c.moveToNext()){
@@ -259,19 +264,23 @@ public final class LudexDb extends SQLiteOpenHelper {
                 g.androidSeconds=Math.max(c.getLong(13),c.getLong(14));
                 g.emulatedSeconds=Math.max(c.getLong(15),c.getLong(16));
                 g.epicSeconds=Math.max(c.getLong(17),c.getLong(18));
-                g.otherSeconds=Math.max(c.getLong(19),c.getLong(20));
-                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.epicSeconds+g.otherSeconds;
-                g.gameNative=c.getInt(21)!=0;g.eden=c.getInt(22)!=0;g.emulated=g.eden||c.getInt(23)!=0;
-                g.steam=c.getInt(24)!=0;g.nintendo=c.getInt(25)!=0;g.epic=c.getInt(26)!=0;g.linkedProvider=c.getString(27);
-                g.firstSeenAt=Math.max(0,c.getLong(28));
-                long firstOpened=Math.max(0,c.getLong(29));
-                long sessionFirst=Math.max(0,c.getLong(30));
-                long nintendoFirst=parseIsoMillis(c.getString(31));
-                g.firstActivityAt=minPositive(firstOpened,minPositive(sessionFirst,nintendoFirst));
-                long epicAcquired=Math.max(0,c.getLong(32));
-                long steamAcquired=Math.max(0,c.getLong(33));
+                g.playstationSeconds=Math.max(c.getLong(19),c.getLong(20));
+                g.otherSeconds=Math.max(c.getLong(21),c.getLong(22));
+                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.epicSeconds+g.playstationSeconds+g.otherSeconds;
+                g.gameNative=c.getInt(23)!=0;g.eden=c.getInt(24)!=0;g.emulated=g.eden||c.getInt(25)!=0;
+                g.steam=c.getInt(26)!=0;g.nintendo=c.getInt(27)!=0;g.epic=c.getInt(28)!=0;g.playstation=c.getInt(29)!=0;g.linkedProvider=c.getString(30);
+                g.firstSeenAt=Math.max(0,c.getLong(31));
+                long firstOpened=Math.max(0,c.getLong(32));
+                long sessionFirst=Math.max(0,c.getLong(33));
+                long nintendoFirst=parseIsoMillis(c.getString(34));
+                long psnFirst=Math.max(0,c.getLong(38));
+                g.firstActivityAt=minPositive(firstOpened,minPositive(sessionFirst,minPositive(nintendoFirst,psnFirst)));
+                long epicAcquired=Math.max(0,c.getLong(35));
+                long steamAcquired=Math.max(0,c.getLong(36));
                 g.acquiredAt=minPositive(epicAcquired,steamAcquired);
-                g.lastPlayedAt=Math.max(0,c.getLong(34));
+                long steamLast=Math.max(0,c.getLong(37));
+                long psnLast=Math.max(0,c.getLong(39));
+                g.lastPlayedAt=Math.max(steamLast,psnLast);
                 out.add(g);
             }
         }
