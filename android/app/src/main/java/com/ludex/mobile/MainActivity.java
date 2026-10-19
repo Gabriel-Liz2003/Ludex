@@ -568,6 +568,22 @@ public final class MainActivity extends AppCompatActivity {
                     }));
                 }
 
+                if(!SecretStore.get(this,"psn.refresh_token").isEmpty()){
+                    remoteTasks.add(remoteSyncIo.submit(()->{
+                        try{
+                            syncPsnPlayHistoryNow();
+                            updated.add("PlayStation");
+                        }catch(Exception e){
+                            String msg=e.getMessage()==null?"":e.getMessage();
+                            if(msg.contains("HTTP 401")||msg.contains("HTTP 403")||msg.toLowerCase(Locale.ROOT).contains("invalid_grant")){
+                                SecretStore.remove(this,"psn.access_token");
+                                SecretStore.remove(this,"psn.refresh_token");
+                            }
+                            failed.add("PlayStation");
+                        }
+                    }));
+                }
+
                 // Eden é local/Shizuku: execute enquanto as APIs remotas trabalham em paralelo.
                 if(Shizuku.pingBinder()){
                     int edenMatched=0;
@@ -589,6 +605,7 @@ public final class MainActivity extends AppCompatActivity {
                     updateSummary(games);
                     updateSteamSyncInfo();
                     updateEpicSyncInfo();
+                    updatePsnSyncInfo();
                     updateNintendoSyncInfo();
                     renderCurrent();
                     refresh.setEnabled(true);
