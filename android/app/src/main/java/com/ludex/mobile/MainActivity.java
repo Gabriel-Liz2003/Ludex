@@ -1907,6 +1907,195 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void updatePsnSyncInfo(){
+        boolean connected=!SecretStore.get(this,"psn.refresh_token").isEmpty();
+        long last=db.getSettingLong("psn.last_sync_ms",0);
+        if(!connected){
+            psnSyncInfo.setText("PSN não conectada. Importe horas totais, primeira/última atividade e troféus dos jogos jogados.");
+            return;
+        }
+        String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
+        long count=db.getSettingLong("psn.last_game_count",0);
+        psnSyncInfo.setText("PlayStation Network conectada"+suffix+(count>0?" · "+count+" jogos":""));
+    }
+
+    private void savePsnCredentials(PsnClient.Credentials credentials) throws Exception {
+        SecretStore.put(this,"psn.access_token",credentials.accessToken);
+        SecretStore.put(this,"psn.refresh_token",credentials.refreshToken);
+        db.setSetting("psn.access_expires_at_ms",Long.toString(credentials.accessExpiresAtMs));
+        db.setSetting("psn.refresh_expires_at_ms",Long.toString(credentials.refreshExpiresAtMs));
+    }
+
+    private void clearPsnCredentials(){
+        SecretStore.remove(this,"psn.access_token");
+        SecretStore.remove(this,"psn.refresh_token");
+        db.setSetting("psn.access_expires_at_ms","0");
+        db.setSetting("psn.refresh_expires_at_ms","0");
+        updatePsnSyncInfo();
+    }
+
+    private PsnClient.Credentials validPsnCredentials() throws Exception {
+        String access=SecretStore.get(this,"psn.access_token");
+        String refresh=SecretStore.get(this,"psn.refresh_token");
+        long accessExpires=db.getSettingLong("psn.access_expires_at_ms",0);
+        long refreshExpires=db.getSettingLong("psn.refresh_expires_at_ms",0);
+        if(refresh.isEmpty())throw new IllegalStateException("PSN não conectada");
+
+        if(!access.isEmpty()&&accessExpires>System.currentTimeMillis()+5*60*1000L){
+            return new PsnClient.Credentials(access,refresh,accessExpires,refreshExpires);
+        }
+
+        PsnClient.Credentials renewed=PsnClient.refresh(refresh);
+        savePsnCredentials(renewed);
+        return renewed;
+    }
+
+    private static final class PsnSyncResult{
+        final int imported,total,withTrophies;
+        PsnSyncResult(int imported,int total,int withTrophies){
+            this.imported=imported;this.total=total;this.withTrophies=withTrophies;
+        }
+    }
+
+    private PsnSyncResult syncPsnPlayHistoryNow() throws Exception {
+        PsnClient.Credentials credentials=validPsnCredentials();
+        List<PsnClient.Title> titles=PsnClient.getPlayedGames(credentials);
+        int withTrophies=0;
+        for(PsnClient.Title title:titles)if(title.trophiesDefined>0)withTrophies++;
+        int imported=db.syncPsnPlayHistory(titles);
+        db.setSetting("psn.last_sync_ms",Long.toString(System.currentTimeMillis()));
+        db.setSetting("psn.last_game_count",Integer.toString(titles.size()));
+        db.setSetting("psn.last_trophy_count",Integer.toString(withTrophies));
+        return new PsnSyncResult(imported,titles.size(),withTrophies);
+    }
+
+    private void syncPsnPlayHistory(boolean notify){
+        if(SecretStore.get(this,"psn.refresh_token").isEmpty()){
+            if(notify)showPsnConnect();
+            return;
+        }
+        if(notify)toast("Sincronizando histórico PlayStation…");
+        io.execute(()->{
+            try{
+                PsnSyncResult result=syncPsnPlayHistoryNow();
+                runOnUiThread(()->{
+                    updatePsnSyncInfo();
+                    if(notify){
+                        String msg=result.total+" jogos PlayStation sincronizados";
+                        if(result.withTrophies>0)msg+=" · "+result.withTrophies+" com troféus";
+                        toast(msg);
+                    }
+                    reloadLibraryAsync();
+                });
+            }catch(Exception e){
+                String msg=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                if(msg.contains("HTTP 401")||msg.contains("HTTP 403")||msg.toLowerCase(Locale.ROOT).contains("invalid_grant")){
+                    clearPsnCredentials();
+                }
+                runOnUiThread(()->{
+                    updatePsnSyncInfo();
+                    toast("Falha na PSN: "+msg);
+                });
+            }
+        });
+    }
+
+    private void showPsnConnect(){
+        boolean connected=!SecretStore.get(this,"psn.refresh_token").isEmpty();
+        if(connected){
+            new MaterialAlertDialogBuilder(this)
+                .setTitle("PlayStation Network")
+                .setMessage("A PSN está conectada. O Ludex lê jogos jogados, playtime, primeira/última atividade e resumo de troféus. A integração usa endpoints da própria Sony que não são documentados como API pública para terceiros e pode exigir ajustes se a Sony os alterar.")
+                .setNegativeButton("Fechar",null)
+                .setNeutralButton("Desconectar",(d,w)->{
+                    clearPsnCredentials();
+                    toast("PSN desconectada");
+                })
+                .setPositiveButton("Sincronizar",(d,w)->syncPsnPlayHistory(true))
+                .show();
+            return;
+        }
+
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,8,pad,0);
+
+        TextView login=new TextView(this);
+        login.setText("1. Entrar no site oficial PlayStation ↗");
+        login.setTextColor(getColor(R.color.ludex_accent));
+        login.setTextSize(15);
+        login.setPadding(0,pad/3,0,pad/2);
+        login.setOnClickListener(v->{
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(PsnClient.signInUrl())));}
+            catch(Exception e){toast("Não foi possível abrir o site PlayStation");}
+        });
+        wrap.addView(login,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView npssoLink=new TextView(this);
+        npssoLink.setText("2. Depois do login, abrir página NPSSO ↗");
+        npssoLink.setTextColor(getColor(R.color.ludex_accent));
+        npssoLink.setTextSize(15);
+        npssoLink.setPadding(0,0,0,pad/2);
+        npssoLink.setOnClickListener(v->{
+            try{
+                startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(PsnClient.npssoUrl())));
+                toast("Copie o JSON com o campo npsso e volte ao Ludex");
+            }catch(Exception e){toast("Não foi possível abrir a página NPSSO");}
+        });
+        wrap.addView(npssoLink,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText input=new EditText(this);
+        input.setSingleLine(false);
+        input.setMinLines(3);
+        input.setMaxLines(6);
+        input.setHint("3. Cole o JSON {\"npsso\":\"...\"} ou somente o token");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        wrap.addView(input,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView note=new TextView(this);
+        note.setText("O NPSSO dá acesso à sua sessão e deve ser tratado como senha. O Ludex usa esse valor apenas para obter tokens PSN e não salva o NPSSO. Access/refresh tokens ficam criptografados pelo Android Keystore.");
+        note.setTextColor(getColor(R.color.ludex_muted));
+        note.setTextSize(12);
+        note.setPadding(0,pad/2,0,0);
+        wrap.addView(note,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle("Conectar PlayStation Network")
+            .setMessage("O login e a geração do NPSSO acontecem nos domínios oficiais da Sony. A integração é experimental porque esses endpoints não são uma API pública documentada para terceiros.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Conectar",null)
+            .create();
+
+        dialog.setOnShowListener(ignored->dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String raw=input.getText()==null?"":input.getText().toString().trim();
+            if(raw.isEmpty()){input.setError("Cole o NPSSO");return;}
+            dialog.dismiss();
+            connectPsn(raw);
+        }));
+        dialog.show();
+    }
+
+    private void connectPsn(String rawNpsso){
+        toast("Conectando à PlayStation Network…");
+        io.execute(()->{
+            try{
+                PsnClient.Credentials credentials=PsnClient.exchangeNpsso(rawNpsso);
+                savePsnCredentials(credentials);
+                PsnSyncResult result=syncPsnPlayHistoryNow();
+                runOnUiThread(()->{
+                    updatePsnSyncInfo();
+                    toast("PSN conectada · "+result.total+" jogos sincronizados");
+                    reloadLibraryAsync();
+                });
+            }catch(Exception e){
+                String msg=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                runOnUiThread(()->toast("Falha ao conectar PSN: "+msg));
+            }
+        });
+    }
+
     private void updateNintendoSyncInfo(){
         boolean connected=!SecretStore.get(this,"nintendo.session_token").isEmpty();
         long last=db.getSettingLong("nintendo.last_sync_ms",0);
