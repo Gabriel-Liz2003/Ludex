@@ -1096,6 +1096,7 @@ public final class MainActivity extends AppCompatActivity {
                     if(psn.platinumEarned>0)message+=" · "+psn.platinumEarned+" platina";
                 }
                 if(psn.playCount>0)message+="\nInicializações PSN: "+psn.playCount;
+                if(psn.lastPlayedAt>0)message+="\nÚltima atividade PSN: "+formatDate(psn.lastPlayedAt);
             }
         }
         message+="\n\nStatus: "+game.status;
