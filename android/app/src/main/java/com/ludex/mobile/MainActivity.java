@@ -868,6 +868,7 @@ public final class MainActivity extends AppCompatActivity {
         if(g==null)return "";
         if(g.steam)return "steam";
         if(g.nintendo)return "nintendo";
+        if(g.playstation)return "playstation";
         if(g.epic)return "epic";
         if("android".equalsIgnoreCase(g.source))return "android";
         String provider=g.linkedProvider==null?"":g.linkedProvider.toLowerCase(Locale.ROOT);
@@ -890,13 +891,15 @@ public final class MainActivity extends AppCompatActivity {
             case ANDROID:return "android".equals(source);
             case STEAM:return g.steam||"steam".equals(source);
             case NINTENDO:return g.nintendo||"nintendo".equals(source);
+            case PLAYSTATION:return g.playstation||"playstation".equals(source)||"psn".equals(source);
             case EPIC:return g.epic||"epic".equals(source);
             case GOG:return "gog".equals(source);
             case XBOX:return "xbox".equals(source)||"microsoft".equals(source);
             case EMULATED:return g.emulated;
             case OTHER:
-                return !g.steam&&!g.nintendo&&!g.epic&&!g.emulated
+                return !g.steam&&!g.nintendo&&!g.epic&&!g.playstation&&!g.emulated
                     && !"android".equals(source)&&!"steam".equals(source)&&!"nintendo".equals(source)
+                    && !"playstation".equals(source)&&!"psn".equals(source)
                     && !"epic".equals(source)&&!"gog".equals(source)&&!"xbox".equals(source)&&!"microsoft".equals(source);
             default:return true;
         }
@@ -908,6 +911,7 @@ public final class MainActivity extends AppCompatActivity {
             case ANDROID:return Math.max(0,row.androidSeconds);
             case STEAM:return Math.max(0,row.steamSeconds);
             case NINTENDO:return Math.max(0,row.nintendoSeconds);
+            case PLAYSTATION:return Math.max(0,row.playstationSeconds);
             case EMULATED:return Math.max(0,row.emulatedSeconds);
             case EPIC:return Math.max(0,row.epicSeconds);
             case GOG:return "gog".equals(sourceKey(row))?Math.max(0,row.otherSeconds):0;
@@ -919,6 +923,7 @@ public final class MainActivity extends AppCompatActivity {
                 return !rowMatchesLibrary(row,LibraryFilter.EPIC)
                     &&!rowMatchesLibrary(row,LibraryFilter.GOG)
                     &&!rowMatchesLibrary(row,LibraryFilter.XBOX)
+                    &&!rowMatchesLibrary(row,LibraryFilter.PLAYSTATION)
                     ?Math.max(0,row.otherSeconds):0;
             default:return 0;
         }
@@ -948,7 +953,7 @@ public final class MainActivity extends AppCompatActivity {
         for(LudexDb.GameRow row:game.variants){
             if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
             if(mode==Tab.EMULATED&&row.emulatedSeconds>0)return true;
-            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.epicSeconds>0||row.otherSeconds>0))return true;
+            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.playstationSeconds>0||row.epicSeconds>0||row.otherSeconds>0))return true;
         }
         return false;
     }
@@ -956,11 +961,13 @@ public final class MainActivity extends AppCompatActivity {
     private String rowLibraryLabel(LudexDb.GameRow row){
         if(row.steam)return "Steam";
         if(row.nintendo)return "Nintendo";
+        if(row.playstation)return "PlayStation";
         String source=sourceKey(row);
         switch(source){
             case "android":return "Android";
             case "steam":return "Steam";
             case "nintendo":return "Nintendo";
+            case "playstation":case "psn":return "PlayStation";
             case "epic":return "Epic";
             case "gog":return "GOG";
             case "xbox":case "microsoft":return "Xbox";
@@ -978,6 +985,7 @@ public final class MainActivity extends AppCompatActivity {
             if(row.androidSeconds>0)labels.add("Android");
             if(row.steamSeconds>0)labels.add("Steam");
             if(row.nintendoSeconds>0)labels.add("Nintendo");
+            if(row.playstationSeconds>0)labels.add("PlayStation");
             if(row.epicSeconds>0)labels.add("Epic");
             if(row.emulatedSeconds>0)labels.add("Emulado");
             if(row.otherSeconds>0)labels.add(rowLibraryLabel(row));
@@ -997,6 +1005,7 @@ public final class MainActivity extends AppCompatActivity {
             addPlaytime(totals,"Android",row.androidSeconds);
             addPlaytime(totals,"Steam",row.steamSeconds);
             addPlaytime(totals,"Nintendo",row.nintendoSeconds);
+            addPlaytime(totals,"PlayStation",row.playstationSeconds);
             addPlaytime(totals,"Epic",row.epicSeconds);
             addPlaytime(totals,"Emulado",row.emulatedSeconds);
             addPlaytime(totals,rowLibraryLabel(row),row.otherSeconds);
@@ -1033,6 +1042,7 @@ public final class MainActivity extends AppCompatActivity {
             if(manual!=null&&!manual.imageUri.isBlank())score+=450;
             if(row.steam)score+=400;
             if(row.epic)score+=350;
+            if(row.playstation)score+=325;
             if(row.nintendo)score+=300;
             if(row.gameNative)score+=200;
             if(row.emulated)score+=100;
