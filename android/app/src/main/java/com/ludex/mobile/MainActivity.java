@@ -819,7 +819,7 @@ public final class MainActivity extends AppCompatActivity {
         int score=titleQuality(g.title);
         if(isLaunchable(g))score+=1000;
         if(g.installed)score+=200;
-        if(g.steam||g.nintendo)score+=50;
+        if(g.steam||g.nintendo||g.playstation)score+=50;
         return score;
     }
 
