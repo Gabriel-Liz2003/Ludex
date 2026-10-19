@@ -392,12 +392,18 @@ public final class LudexDb extends SQLiteOpenHelper {
 
                 ContentValues g=new ContentValues();
                 g.put("id",gameId);g.put("title",item.name);g.put("platform",item.platform());g.put("source","psn");
-                g.put("installed",0);g.put("first_seen_at",now);g.put("updated_at",now);
+                g.put("installed",0);g.put("first_seen_at",now);g.put("first_opened_at",Math.max(0,item.firstPlayedAtMs));g.put("updated_at",now);
                 db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
 
                 ContentValues gu=new ContentValues();
                 gu.put("title",item.name);gu.put("platform",item.platform());gu.put("source","psn");gu.put("updated_at",now);
                 db.update("games",gu,"id=?",new String[]{gameId});
+                if(item.firstPlayedAtMs>0){
+                    db.execSQL(
+                        "UPDATE games SET first_opened_at=CASE WHEN first_opened_at=0 OR first_opened_at>? THEN ? ELSE first_opened_at END WHERE id=?",
+                        new Object[]{item.firstPlayedAtMs,item.firstPlayedAtMs,gameId}
+                    );
+                }
 
                 ContentValues psg=new ContentValues();
                 psg.put("game_id",gameId);psg.put("title_id",item.titleId);psg.put("concept_id",item.conceptId);
