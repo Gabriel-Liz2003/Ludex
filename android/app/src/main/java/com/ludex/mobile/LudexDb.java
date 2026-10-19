@@ -10,8 +10,8 @@ import java.util.*;
 public final class LudexDb extends SQLiteOpenHelper {
     public static final class GameRow {
         public String id,title,platform,source,packageName,status,linkedProvider;
-        public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo,epic;
-        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,epicSeconds,otherSeconds;
+        public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo,epic,playstation;
+        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,epicSeconds,playstationSeconds,otherSeconds;
         public long firstSeenAt,firstActivityAt,acquiredAt,lastPlayedAt;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
@@ -49,6 +49,18 @@ public final class LudexDb extends SQLiteOpenHelper {
             this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.imageUrl=imageUrl;
         }
     }
+    public static final class PsnInfo {
+        public final String titleId,conceptId,imageUrl,category,service;
+        public final long firstPlayedAt,lastPlayedAt;
+        public final int playCount,trophyProgress,trophiesEarned,trophiesDefined,platinumEarned;
+        PsnInfo(String titleId,String conceptId,String imageUrl,String category,String service,
+                long firstPlayedAt,long lastPlayedAt,int playCount,int trophyProgress,
+                int trophiesEarned,int trophiesDefined,int platinumEarned){
+            this.titleId=titleId;this.conceptId=conceptId;this.imageUrl=imageUrl;this.category=category;this.service=service;
+            this.firstPlayedAt=firstPlayedAt;this.lastPlayedAt=lastPlayedAt;this.playCount=playCount;
+            this.trophyProgress=trophyProgress;this.trophiesEarned=trophiesEarned;this.trophiesDefined=trophiesDefined;this.platinumEarned=platinumEarned;
+        }
+    }
     public static final class EpicPending {
         public final String appName,namespace,catalogItemId;
         public final long seconds;
@@ -64,7 +76,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,17);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,18);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -79,6 +91,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,acquired_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',acquisition_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_unresolved(app_name TEXT PRIMARY KEY,namespace TEXT NOT NULL DEFAULT '',catalog_item_id TEXT NOT NULL DEFAULT '',seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE psn_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL UNIQUE,concept_id TEXT NOT NULL DEFAULT '',image_url TEXT NOT NULL DEFAULT '',category TEXT NOT NULL DEFAULT '',service TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,play_count INTEGER NOT NULL DEFAULT 0,trophy_progress INTEGER NOT NULL DEFAULT 0,trophies_earned INTEGER NOT NULL DEFAULT 0,trophies_defined INTEGER NOT NULL DEFAULT 0,platinum_earned INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
@@ -111,6 +124,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             try{db.execSQL("ALTER TABLE steam_games ADD COLUMN acquired_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
             try{db.execSQL("ALTER TABLE steam_games ADD COLUMN last_played_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
         }
+        if(oldV<18)db.execSQL("CREATE TABLE IF NOT EXISTS psn_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL UNIQUE,concept_id TEXT NOT NULL DEFAULT '',image_url TEXT NOT NULL DEFAULT '',category TEXT NOT NULL DEFAULT '',service TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,play_count INTEGER NOT NULL DEFAULT 0,trophy_progress INTEGER NOT NULL DEFAULT 0,trophies_earned INTEGER NOT NULL DEFAULT 0,trophies_defined INTEGER NOT NULL DEFAULT 0,platinum_earned INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
     }
 
     private static String manualSource(String platformKey){
