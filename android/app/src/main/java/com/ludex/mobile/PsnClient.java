@@ -86,7 +86,7 @@ public final class PsnClient {
             if(token.isEmpty())throw new IllegalArgumentException("JSON sem campo npsso");
             return token;
         }
-        if(value.startsWith(""")&&value.endsWith(""")&&value.length()>2){
+        if(value.startsWith("\"")&&value.endsWith("\"")&&value.length()>2){
             value=value.substring(1,value.length()-1).trim();
         }
         return value;
