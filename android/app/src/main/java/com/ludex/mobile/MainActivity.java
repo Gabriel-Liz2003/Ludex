@@ -1018,6 +1018,13 @@ public final class MainActivity extends AppCompatActivity {
         return out.toString();
     }
 
+    private LudexDb.GameRow psnVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants){
+            if(row.playstation&&db.getPsnInfo(row.id)!=null)return row;
+        }
+        return null;
+    }
+
     private LudexDb.GameRow androidVariant(DisplayGame game){
         for(LudexDb.GameRow row:game.variants){
             if("android".equalsIgnoreCase(row.source)&&row.packageName!=null)return row;
@@ -1080,6 +1087,17 @@ public final class MainActivity extends AppCompatActivity {
         String date=gameDateLabel(game);
         if(!date.isBlank())message+="\n"+date;
         if(!breakdown.isBlank())message+="\n\n"+breakdown;
+        LudexDb.GameRow psnRow=psnVariant(game);
+        if(psnRow!=null){
+            LudexDb.PsnInfo psn=db.getPsnInfo(psnRow.id);
+            if(psn!=null){
+                if(psn.trophiesDefined>0){
+                    message+="\nTroféus PSN: "+psn.trophiesEarned+"/"+psn.trophiesDefined+" · "+psn.trophyProgress+"%";
+                    if(psn.platinumEarned>0)message+=" · "+psn.platinumEarned+" platina";
+                }
+                if(psn.playCount>0)message+="\nInicializações PSN: "+psn.playCount;
+            }
+        }
         message+="\n\nStatus: "+game.status;
         new MaterialAlertDialogBuilder(this)
             .setTitle(game.title)
