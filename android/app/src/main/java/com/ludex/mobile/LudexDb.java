@@ -379,6 +379,59 @@ public final class LudexDb extends SQLiteOpenHelper {
         return null;
     }
 
+    public int syncPsnPlayHistory(List<PsnClient.Title> titles){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;long now=System.currentTimeMillis();
+        try{
+            for(PsnClient.Title item:titles){
+                if(item.titleId==null||item.titleId.isBlank()||item.name==null||item.name.isBlank())continue;
+                String gameId=null;
+                try(Cursor cur=db.rawQuery("SELECT game_id FROM psn_games WHERE title_id=? LIMIT 1",new String[]{item.titleId})){
+                    if(cur.moveToFirst())gameId=cur.getString(0);
+                }
+                if(gameId==null)gameId="psn:"+item.titleId;
+
+                ContentValues g=new ContentValues();
+                g.put("id",gameId);g.put("title",item.name);g.put("platform",item.platform());g.put("source","psn");
+                g.put("installed",0);g.put("first_seen_at",now);g.put("updated_at",now);
+                db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+
+                ContentValues gu=new ContentValues();
+                gu.put("title",item.name);gu.put("platform",item.platform());gu.put("source","psn");gu.put("updated_at",now);
+                db.update("games",gu,"id=?",new String[]{gameId});
+
+                ContentValues psg=new ContentValues();
+                psg.put("game_id",gameId);psg.put("title_id",item.titleId);psg.put("concept_id",item.conceptId);
+                psg.put("image_url",item.imageUrl);psg.put("category",item.category);psg.put("service",item.service);
+                psg.put("first_played_at",Math.max(0,item.firstPlayedAtMs));psg.put("last_played_at",Math.max(0,item.lastPlayedAtMs));
+                psg.put("play_count",Math.max(0,item.playCount));psg.put("trophy_progress",Math.max(0,item.trophyProgress));
+                psg.put("trophies_earned",Math.max(0,item.trophiesEarned));psg.put("trophies_defined",Math.max(0,item.trophiesDefined));
+                psg.put("platinum_earned",Math.max(0,item.platinumEarned));psg.put("updated_at",now);
+                db.insertWithOnConflict("psn_games",null,psg,SQLiteDatabase.CONFLICT_REPLACE);
+
+                ContentValues play=new ContentValues();
+                play.put("game_id",gameId);play.put("provider","playstation");play.put("seconds",Math.max(0,item.seconds));play.put("updated_at",now);
+                db.insertWithOnConflict("imported_playtime",null,play,SQLiteDatabase.CONFLICT_REPLACE);
+
+                db.delete("hidden_games","game_id=?",new String[]{gameId});
+                count++;
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return count;
+    }
+
+    public PsnInfo getPsnInfo(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT title_id,concept_id,image_url,category,service,first_played_at,last_played_at,play_count,trophy_progress,trophies_earned,trophies_defined,platinum_earned FROM psn_games WHERE game_id=? LIMIT 1",
+            new String[]{gameId})){
+            if(c.moveToFirst())return new PsnInfo(
+                c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getString(4),
+                c.getLong(5),c.getLong(6),c.getInt(7),c.getInt(8),c.getInt(9),c.getInt(10),c.getInt(11)
+            );
+        }
+        return null;
+    }
+
     public int syncEpicLibrary(List<EpicLibraryClient.LibraryGame> games){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;long now=System.currentTimeMillis();
         LinkedHashSet<String> seen=new LinkedHashSet<>();
