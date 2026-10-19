@@ -36,6 +36,7 @@ public final class MainActivity extends AppCompatActivity {
         ANDROID("android","Android"),
         STEAM("steam","Steam"),
         NINTENDO("nintendo","Nintendo"),
+        PLAYSTATION("playstation","PlayStation"),
         EPIC("epic","Epic"),
         GOG("gog","GOG"),
         XBOX("xbox","Xbox"),
@@ -66,10 +67,10 @@ public final class MainActivity extends AppCompatActivity {
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, nintendoSyncInfo, artworkInfo;
+    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, psnSyncInfo, nintendoSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
-    private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(3);
+    private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(4);
     private final ExecutorService artworkIo=Executors.newFixedThreadPool(4);
     private final android.util.LruCache<String,android.graphics.Bitmap> artworkMemory=
         new android.util.LruCache<String,android.graphics.Bitmap>(24*1024){
@@ -276,6 +277,7 @@ public final class MainActivity extends AppCompatActivity {
         syncInfo=findViewById(R.id.sync_info);
         steamSyncInfo=findViewById(R.id.steam_sync_info);
         epicSyncInfo=findViewById(R.id.epic_sync_info);
+        psnSyncInfo=findViewById(R.id.psn_sync_info);
         nintendoSyncInfo=findViewById(R.id.nintendo_sync_info);
         artworkInfo=findViewById(R.id.artwork_info);
         emptyState=findViewById(R.id.empty_state);
@@ -312,6 +314,8 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.epic_connect).setOnClickListener(v->showEpicConnect());
         findViewById(R.id.epic_sync).setOnClickListener(v->syncEpicLibrary(true));
         findViewById(R.id.epic_pending).setOnClickListener(v->showEpicPending());
+        findViewById(R.id.psn_connect).setOnClickListener(v->showPsnConnect());
+        findViewById(R.id.psn_sync).setOnClickListener(v->syncPsnPlayHistory(true));
         findViewById(R.id.nintendo_connect).setOnClickListener(v->showNintendoConnect());
         findViewById(R.id.nintendo_sync).setOnClickListener(v->syncNintendoPlaytime(true));
         findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
@@ -659,6 +663,7 @@ public final class MainActivity extends AppCompatActivity {
                 "O Android não expõe o histórico oficial do Google Play; o Ludex usa Usage Access para medir o tempo em primeiro plano dos jogos neste aparelho e sincroniza esse tempo com o PC.");
             updateSteamSyncInfo();
             updateEpicSyncInfo();
+            updatePsnSyncInfo();
             updateNintendoSyncInfo();
             updateArtworkInfo();
             return;
