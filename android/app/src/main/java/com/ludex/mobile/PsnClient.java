@@ -110,7 +110,14 @@ public final class PsnClient {
         form.put("grant_type","refresh_token");
         form.put("token_format","jwt");
         form.put("scope",SCOPE);
-        return exchangeToken(form);
+        Credentials renewed=exchangeToken(form);
+        if(!renewed.refreshToken.isBlank())return renewed;
+        return new Credentials(
+            renewed.accessToken,
+            refreshToken.trim(),
+            renewed.accessExpiresAtMs,
+            renewed.refreshExpiresAtMs
+        );
     }
 
     private static String exchangeNpssoForCode(String npsso) throws Exception {
@@ -169,7 +176,7 @@ public final class PsnClient {
 
         while(seenOffsets.add(offset)){
             String url=GAMES_BASE+
-                "?categories="+enc("ps4_game,ps5_native_game,ps3_game,pspc_game,unknown")+
+                "?categories="+enc("ps4_game,ps5_native_game,pspc_game,unknown")+
                 "&limit="+limit+"&offset="+offset;
             JSONObject json=new JSONObject(request("GET",url,"Bearer "+credentials.accessToken,null,null));
             if(json.has("error"))throw new IOException(json.optJSONObject("error").optString("message","Falha ao consultar jogos PSN"));
