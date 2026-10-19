@@ -971,7 +971,6 @@ public final class MainActivity extends AppCompatActivity {
             case "epic":return "Epic";
             case "gog":return "GOG";
             case "xbox":case "microsoft":return "Xbox";
-            case "playstation":return "PlayStation";
             case "pc":return "PC";
             case "other":return "Manual";
             case "emulated":return "Emulado";
