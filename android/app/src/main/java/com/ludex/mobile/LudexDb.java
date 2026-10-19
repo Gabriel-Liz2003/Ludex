@@ -10,8 +10,8 @@ import java.util.*;
 public final class LudexDb extends SQLiteOpenHelper {
     public static final class GameRow {
         public String id,title,platform,source,packageName,status,linkedProvider;
-        public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo,epic;
-        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,epicSeconds,otherSeconds;
+        public boolean installed,favorite,gameNative,eden,emulated,steam,nintendo,epic,playstation;
+        public long seconds,updatedAt,steamSeconds,nintendoSeconds,androidSeconds,emulatedSeconds,epicSeconds,playstationSeconds,otherSeconds;
         public long firstSeenAt,firstActivityAt,acquiredAt,lastPlayedAt;
     }
     public static final class SyncResult { public int inserted,updated,skipped; }
@@ -49,6 +49,18 @@ public final class LudexDb extends SQLiteOpenHelper {
             this.appName=appName;this.namespace=namespace;this.catalogItemId=catalogItemId;this.imageUrl=imageUrl;
         }
     }
+    public static final class PsnInfo {
+        public final String titleId,conceptId,imageUrl,category,service;
+        public final long firstPlayedAt,lastPlayedAt;
+        public final int playCount,trophyProgress,trophiesEarned,trophiesDefined,platinumEarned;
+        PsnInfo(String titleId,String conceptId,String imageUrl,String category,String service,
+                long firstPlayedAt,long lastPlayedAt,int playCount,int trophyProgress,
+                int trophiesEarned,int trophiesDefined,int platinumEarned){
+            this.titleId=titleId;this.conceptId=conceptId;this.imageUrl=imageUrl;this.category=category;this.service=service;
+            this.firstPlayedAt=firstPlayedAt;this.lastPlayedAt=lastPlayedAt;this.playCount=playCount;
+            this.trophyProgress=trophyProgress;this.trophiesEarned=trophiesEarned;this.trophiesDefined=trophiesDefined;this.platinumEarned=platinumEarned;
+        }
+    }
     public static final class EpicPending {
         public final String appName,namespace,catalogItemId;
         public final long seconds;
@@ -64,7 +76,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,17);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,18);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -79,6 +91,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE steam_games(game_id TEXT PRIMARY KEY,app_id TEXT NOT NULL UNIQUE,family_shared INTEGER NOT NULL DEFAULT 0,acquired_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_games(game_id TEXT PRIMARY KEY,app_name TEXT NOT NULL UNIQUE,namespace TEXT NOT NULL,catalog_item_id TEXT NOT NULL,image_url TEXT NOT NULL DEFAULT '',acquisition_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE epic_unresolved(app_name TEXT PRIMARY KEY,namespace TEXT NOT NULL DEFAULT '',catalog_item_id TEXT NOT NULL DEFAULT '',seconds INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE psn_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL UNIQUE,concept_id TEXT NOT NULL DEFAULT '',image_url TEXT NOT NULL DEFAULT '',category TEXT NOT NULL DEFAULT '',service TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,play_count INTEGER NOT NULL DEFAULT 0,trophy_progress INTEGER NOT NULL DEFAULT 0,trophies_earned INTEGER NOT NULL DEFAULT 0,trophies_defined INTEGER NOT NULL DEFAULT 0,platinum_earned INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
     }
@@ -111,6 +124,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             try{db.execSQL("ALTER TABLE steam_games ADD COLUMN acquired_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
             try{db.execSQL("ALTER TABLE steam_games ADD COLUMN last_played_at INTEGER NOT NULL DEFAULT 0");}catch(Exception ignored){}
         }
+        if(oldV<18)db.execSQL("CREATE TABLE IF NOT EXISTS psn_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL UNIQUE,concept_id TEXT NOT NULL DEFAULT '',image_url TEXT NOT NULL DEFAULT '',category TEXT NOT NULL DEFAULT '',service TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,play_count INTEGER NOT NULL DEFAULT 0,trophy_progress INTEGER NOT NULL DEFAULT 0,trophies_earned INTEGER NOT NULL DEFAULT 0,trophies_defined INTEGER NOT NULL DEFAULT 0,platinum_earned INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
     }
 
     private static String manualSource(String platformKey){
@@ -218,21 +232,26 @@ public final class LudexDb extends SQLiteOpenHelper {
             "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND (lower(p.provider) LIKE 'eden%' OR lower(p.provider) LIKE 'emulator%')),0),"+
             "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) LIKE 'epic%'),0),"+
             "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) LIKE 'epic%'),0),"+
-            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%' AND lower(s.provider) NOT LIKE 'epic%'),0),"+
-            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%' AND lower(p.provider) NOT LIKE 'epic%'),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND (lower(s.provider) LIKE 'playstation%' OR lower(s.provider) LIKE 'psn%')),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND (lower(p.provider) LIKE 'playstation%' OR lower(p.provider) LIKE 'psn%')),0),"+
+            "COALESCE((SELECT SUM(duration_seconds) FROM play_sessions s WHERE s.game_id=g.id AND lower(s.provider) NOT LIKE 'steam%' AND lower(s.provider) NOT LIKE 'nintendo%' AND lower(s.provider) NOT LIKE 'android%' AND lower(s.provider) NOT LIKE 'eden%' AND lower(s.provider) NOT LIKE 'emulator%' AND lower(s.provider) NOT LIKE 'epic%' AND lower(s.provider) NOT LIKE 'playstation%' AND lower(s.provider) NOT LIKE 'psn%'),0),"+
+            "COALESCE((SELECT MAX(seconds) FROM imported_playtime p WHERE p.game_id=g.id AND lower(p.provider) NOT LIKE 'steam%' AND lower(p.provider) NOT LIKE 'nintendo%' AND lower(p.provider) NOT LIKE 'android%' AND lower(p.provider) NOT LIKE 'eden%' AND lower(p.provider) NOT LIKE 'emulator%' AND lower(p.provider) NOT LIKE 'epic%' AND lower(p.provider) NOT LIKE 'playstation%' AND lower(p.provider) NOT LIKE 'psn%'),0),"+
             "EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM eden_games eg WHERE eg.game_id=g.id),"+
             "EXISTS(SELECT 1 FROM emulator_games em WHERE em.game_id=g.id),"+
             "CASE WHEN lower(g.source) IN ('steam','steam-family') OR EXISTS(SELECT 1 FROM steam_games sg WHERE sg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='steam') THEN 1 ELSE 0 END,"+
-            "CASE WHEN lower(g.source)='nintendo' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
+            "CASE WHEN lower(g.source)='nintendo' OR lower(g.source)='nintendo-manual' OR EXISTS(SELECT 1 FROM nintendo_games ng WHERE ng.game_id=g.id) THEN 1 ELSE 0 END,"+
             "CASE WHEN lower(g.source)='epic' OR EXISTS(SELECT 1 FROM epic_games eg WHERE eg.game_id=g.id) OR EXISTS(SELECT 1 FROM gamenative_games gn WHERE gn.game_id=g.id AND lower(gn.provider)='epic') THEN 1 ELSE 0 END,"+
+            "CASE WHEN lower(g.source) IN ('psn','playstation-manual') OR EXISTS(SELECT 1 FROM psn_games pg WHERE pg.game_id=g.id) THEN 1 ELSE 0 END,"+
             "COALESCE((SELECT lower(gn.provider) FROM gamenative_games gn WHERE gn.game_id=g.id LIMIT 1),''),"+
             "g.first_seen_at,g.first_opened_at,"+
             "COALESCE((SELECT MIN(started_at) FROM play_sessions ps WHERE ps.game_id=g.id),0),"+
             "COALESCE((SELECT first_played_at FROM nintendo_games ng WHERE ng.game_id=g.id LIMIT 1),''),"+
             "COALESCE((SELECT acquisition_at FROM epic_games eg WHERE eg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT acquired_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
-            "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0) "+
+            "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT first_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT last_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0) "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
             while(c.moveToNext()){
@@ -245,19 +264,23 @@ public final class LudexDb extends SQLiteOpenHelper {
                 g.androidSeconds=Math.max(c.getLong(13),c.getLong(14));
                 g.emulatedSeconds=Math.max(c.getLong(15),c.getLong(16));
                 g.epicSeconds=Math.max(c.getLong(17),c.getLong(18));
-                g.otherSeconds=Math.max(c.getLong(19),c.getLong(20));
-                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.epicSeconds+g.otherSeconds;
-                g.gameNative=c.getInt(21)!=0;g.eden=c.getInt(22)!=0;g.emulated=g.eden||c.getInt(23)!=0;
-                g.steam=c.getInt(24)!=0;g.nintendo=c.getInt(25)!=0;g.epic=c.getInt(26)!=0;g.linkedProvider=c.getString(27);
-                g.firstSeenAt=Math.max(0,c.getLong(28));
-                long firstOpened=Math.max(0,c.getLong(29));
-                long sessionFirst=Math.max(0,c.getLong(30));
-                long nintendoFirst=parseIsoMillis(c.getString(31));
-                g.firstActivityAt=minPositive(firstOpened,minPositive(sessionFirst,nintendoFirst));
-                long epicAcquired=Math.max(0,c.getLong(32));
-                long steamAcquired=Math.max(0,c.getLong(33));
+                g.playstationSeconds=Math.max(c.getLong(19),c.getLong(20));
+                g.otherSeconds=Math.max(c.getLong(21),c.getLong(22));
+                g.seconds=g.steamSeconds+g.nintendoSeconds+g.androidSeconds+g.emulatedSeconds+g.epicSeconds+g.playstationSeconds+g.otherSeconds;
+                g.gameNative=c.getInt(23)!=0;g.eden=c.getInt(24)!=0;g.emulated=g.eden||c.getInt(25)!=0;
+                g.steam=c.getInt(26)!=0;g.nintendo=c.getInt(27)!=0;g.epic=c.getInt(28)!=0;g.playstation=c.getInt(29)!=0;g.linkedProvider=c.getString(30);
+                g.firstSeenAt=Math.max(0,c.getLong(31));
+                long firstOpened=Math.max(0,c.getLong(32));
+                long sessionFirst=Math.max(0,c.getLong(33));
+                long nintendoFirst=parseIsoMillis(c.getString(34));
+                long psnFirst=Math.max(0,c.getLong(38));
+                g.firstActivityAt=minPositive(firstOpened,minPositive(sessionFirst,minPositive(nintendoFirst,psnFirst)));
+                long epicAcquired=Math.max(0,c.getLong(35));
+                long steamAcquired=Math.max(0,c.getLong(36));
                 g.acquiredAt=minPositive(epicAcquired,steamAcquired);
-                g.lastPlayedAt=Math.max(0,c.getLong(34));
+                long steamLast=Math.max(0,c.getLong(37));
+                long psnLast=Math.max(0,c.getLong(39));
+                g.lastPlayedAt=Math.max(steamLast,psnLast);
                 out.add(g);
             }
         }
@@ -352,6 +375,65 @@ public final class LudexDb extends SQLiteOpenHelper {
     public SteamInfo getSteamInfo(String gameId){
         try(Cursor c=getReadableDatabase().rawQuery("SELECT app_id,family_shared,acquired_at,last_played_at FROM steam_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
             if(c.moveToFirst())return new SteamInfo(c.getString(0),c.getInt(1)!=0,c.getLong(2),c.getLong(3));
+        }
+        return null;
+    }
+
+    public int syncPsnPlayHistory(List<PsnClient.Title> titles){
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();int count=0;long now=System.currentTimeMillis();
+        try{
+            for(PsnClient.Title item:titles){
+                if(item.titleId==null||item.titleId.isBlank()||item.name==null||item.name.isBlank())continue;
+                String gameId=null;
+                try(Cursor cur=db.rawQuery("SELECT game_id FROM psn_games WHERE title_id=? LIMIT 1",new String[]{item.titleId})){
+                    if(cur.moveToFirst())gameId=cur.getString(0);
+                }
+                if(gameId==null)gameId="psn:"+item.titleId;
+
+                ContentValues g=new ContentValues();
+                g.put("id",gameId);g.put("title",item.name);g.put("platform",item.platform());g.put("source","psn");
+                g.put("installed",0);g.put("first_seen_at",now);g.put("first_opened_at",Math.max(0,item.firstPlayedAtMs));g.put("updated_at",now);
+                db.insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+
+                ContentValues gu=new ContentValues();
+                gu.put("title",item.name);gu.put("platform",item.platform());gu.put("source","psn");gu.put("updated_at",now);
+                db.update("games",gu,"id=?",new String[]{gameId});
+                if(item.firstPlayedAtMs>0){
+                    db.execSQL(
+                        "UPDATE games SET first_opened_at=CASE WHEN first_opened_at=0 OR first_opened_at>? THEN ? ELSE first_opened_at END WHERE id=?",
+                        new Object[]{item.firstPlayedAtMs,item.firstPlayedAtMs,gameId}
+                    );
+                }
+
+                ContentValues psg=new ContentValues();
+                psg.put("game_id",gameId);psg.put("title_id",item.titleId);psg.put("concept_id",item.conceptId);
+                psg.put("image_url",item.imageUrl);psg.put("category",item.category);psg.put("service",item.service);
+                psg.put("first_played_at",Math.max(0,item.firstPlayedAtMs));psg.put("last_played_at",Math.max(0,item.lastPlayedAtMs));
+                psg.put("play_count",Math.max(0,item.playCount));psg.put("trophy_progress",Math.max(0,item.trophyProgress));
+                psg.put("trophies_earned",Math.max(0,item.trophiesEarned));psg.put("trophies_defined",Math.max(0,item.trophiesDefined));
+                psg.put("platinum_earned",Math.max(0,item.platinumEarned));psg.put("updated_at",now);
+                db.insertWithOnConflict("psn_games",null,psg,SQLiteDatabase.CONFLICT_REPLACE);
+
+                ContentValues play=new ContentValues();
+                play.put("game_id",gameId);play.put("provider","playstation");play.put("seconds",Math.max(0,item.seconds));play.put("updated_at",now);
+                db.insertWithOnConflict("imported_playtime",null,play,SQLiteDatabase.CONFLICT_REPLACE);
+
+                db.delete("hidden_games","game_id=?",new String[]{gameId});
+                count++;
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+        return count;
+    }
+
+    public PsnInfo getPsnInfo(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT title_id,concept_id,image_url,category,service,first_played_at,last_played_at,play_count,trophy_progress,trophies_earned,trophies_defined,platinum_earned FROM psn_games WHERE game_id=? LIMIT 1",
+            new String[]{gameId})){
+            if(c.moveToFirst())return new PsnInfo(
+                c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getString(4),
+                c.getLong(5),c.getLong(6),c.getInt(7),c.getInt(8),c.getInt(9),c.getInt(10),c.getInt(11)
+            );
         }
         return null;
     }

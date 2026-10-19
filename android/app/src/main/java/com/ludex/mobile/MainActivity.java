@@ -36,6 +36,7 @@ public final class MainActivity extends AppCompatActivity {
         ANDROID("android","Android"),
         STEAM("steam","Steam"),
         NINTENDO("nintendo","Nintendo"),
+        PLAYSTATION("playstation","PlayStation"),
         EPIC("epic","Epic"),
         GOG("gog","GOG"),
         XBOX("xbox","Xbox"),
@@ -66,10 +67,10 @@ public final class MainActivity extends AppCompatActivity {
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, nintendoSyncInfo, artworkInfo;
+    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, psnSyncInfo, nintendoSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
-    private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(3);
+    private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(4);
     private final ExecutorService artworkIo=Executors.newFixedThreadPool(4);
     private final android.util.LruCache<String,android.graphics.Bitmap> artworkMemory=
         new android.util.LruCache<String,android.graphics.Bitmap>(24*1024){
@@ -276,6 +277,7 @@ public final class MainActivity extends AppCompatActivity {
         syncInfo=findViewById(R.id.sync_info);
         steamSyncInfo=findViewById(R.id.steam_sync_info);
         epicSyncInfo=findViewById(R.id.epic_sync_info);
+        psnSyncInfo=findViewById(R.id.psn_sync_info);
         nintendoSyncInfo=findViewById(R.id.nintendo_sync_info);
         artworkInfo=findViewById(R.id.artwork_info);
         emptyState=findViewById(R.id.empty_state);
@@ -312,6 +314,8 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.epic_connect).setOnClickListener(v->showEpicConnect());
         findViewById(R.id.epic_sync).setOnClickListener(v->syncEpicLibrary(true));
         findViewById(R.id.epic_pending).setOnClickListener(v->showEpicPending());
+        findViewById(R.id.psn_connect).setOnClickListener(v->showPsnConnect());
+        findViewById(R.id.psn_sync).setOnClickListener(v->syncPsnPlayHistory(true));
         findViewById(R.id.nintendo_connect).setOnClickListener(v->showNintendoConnect());
         findViewById(R.id.nintendo_sync).setOnClickListener(v->syncNintendoPlaytime(true));
         findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
@@ -564,6 +568,22 @@ public final class MainActivity extends AppCompatActivity {
                     }));
                 }
 
+                if(!SecretStore.get(this,"psn.refresh_token").isEmpty()){
+                    remoteTasks.add(remoteSyncIo.submit(()->{
+                        try{
+                            syncPsnPlayHistoryNow();
+                            updated.add("PlayStation");
+                        }catch(Exception e){
+                            String msg=e.getMessage()==null?"":e.getMessage();
+                            if(msg.contains("HTTP 401")||msg.contains("HTTP 403")||msg.toLowerCase(Locale.ROOT).contains("invalid_grant")){
+                                SecretStore.remove(this,"psn.access_token");
+                                SecretStore.remove(this,"psn.refresh_token");
+                            }
+                            failed.add("PlayStation");
+                        }
+                    }));
+                }
+
                 // Eden é local/Shizuku: execute enquanto as APIs remotas trabalham em paralelo.
                 if(Shizuku.pingBinder()){
                     int edenMatched=0;
@@ -585,6 +605,7 @@ public final class MainActivity extends AppCompatActivity {
                     updateSummary(games);
                     updateSteamSyncInfo();
                     updateEpicSyncInfo();
+                    updatePsnSyncInfo();
                     updateNintendoSyncInfo();
                     renderCurrent();
                     refresh.setEnabled(true);
@@ -659,6 +680,7 @@ public final class MainActivity extends AppCompatActivity {
                 "O Android não expõe o histórico oficial do Google Play; o Ludex usa Usage Access para medir o tempo em primeiro plano dos jogos neste aparelho e sincroniza esse tempo com o PC.");
             updateSteamSyncInfo();
             updateEpicSyncInfo();
+            updatePsnSyncInfo();
             updateNintendoSyncInfo();
             updateArtworkInfo();
             return;
@@ -797,7 +819,7 @@ public final class MainActivity extends AppCompatActivity {
         int score=titleQuality(g.title);
         if(isLaunchable(g))score+=1000;
         if(g.installed)score+=200;
-        if(g.steam||g.nintendo)score+=50;
+        if(g.steam||g.nintendo||g.playstation)score+=50;
         return score;
     }
 
@@ -846,6 +868,7 @@ public final class MainActivity extends AppCompatActivity {
         if(g==null)return "";
         if(g.steam)return "steam";
         if(g.nintendo)return "nintendo";
+        if(g.playstation)return "playstation";
         if(g.epic)return "epic";
         if("android".equalsIgnoreCase(g.source))return "android";
         String provider=g.linkedProvider==null?"":g.linkedProvider.toLowerCase(Locale.ROOT);
@@ -868,13 +891,15 @@ public final class MainActivity extends AppCompatActivity {
             case ANDROID:return "android".equals(source);
             case STEAM:return g.steam||"steam".equals(source);
             case NINTENDO:return g.nintendo||"nintendo".equals(source);
+            case PLAYSTATION:return g.playstation||"playstation".equals(source)||"psn".equals(source);
             case EPIC:return g.epic||"epic".equals(source);
             case GOG:return "gog".equals(source);
             case XBOX:return "xbox".equals(source)||"microsoft".equals(source);
             case EMULATED:return g.emulated;
             case OTHER:
-                return !g.steam&&!g.nintendo&&!g.epic&&!g.emulated
+                return !g.steam&&!g.nintendo&&!g.epic&&!g.playstation&&!g.emulated
                     && !"android".equals(source)&&!"steam".equals(source)&&!"nintendo".equals(source)
+                    && !"playstation".equals(source)&&!"psn".equals(source)
                     && !"epic".equals(source)&&!"gog".equals(source)&&!"xbox".equals(source)&&!"microsoft".equals(source);
             default:return true;
         }
@@ -886,6 +911,7 @@ public final class MainActivity extends AppCompatActivity {
             case ANDROID:return Math.max(0,row.androidSeconds);
             case STEAM:return Math.max(0,row.steamSeconds);
             case NINTENDO:return Math.max(0,row.nintendoSeconds);
+            case PLAYSTATION:return Math.max(0,row.playstationSeconds);
             case EMULATED:return Math.max(0,row.emulatedSeconds);
             case EPIC:return Math.max(0,row.epicSeconds);
             case GOG:return "gog".equals(sourceKey(row))?Math.max(0,row.otherSeconds):0;
@@ -897,6 +923,7 @@ public final class MainActivity extends AppCompatActivity {
                 return !rowMatchesLibrary(row,LibraryFilter.EPIC)
                     &&!rowMatchesLibrary(row,LibraryFilter.GOG)
                     &&!rowMatchesLibrary(row,LibraryFilter.XBOX)
+                    &&!rowMatchesLibrary(row,LibraryFilter.PLAYSTATION)
                     ?Math.max(0,row.otherSeconds):0;
             default:return 0;
         }
@@ -926,7 +953,7 @@ public final class MainActivity extends AppCompatActivity {
         for(LudexDb.GameRow row:game.variants){
             if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
             if(mode==Tab.EMULATED&&row.emulatedSeconds>0)return true;
-            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.epicSeconds>0||row.otherSeconds>0))return true;
+            if(mode==Tab.LIBRARY&&(row.androidSeconds>0||row.steamSeconds>0||row.nintendoSeconds>0||row.playstationSeconds>0||row.epicSeconds>0||row.otherSeconds>0))return true;
         }
         return false;
     }
@@ -934,15 +961,16 @@ public final class MainActivity extends AppCompatActivity {
     private String rowLibraryLabel(LudexDb.GameRow row){
         if(row.steam)return "Steam";
         if(row.nintendo)return "Nintendo";
+        if(row.playstation)return "PlayStation";
         String source=sourceKey(row);
         switch(source){
             case "android":return "Android";
             case "steam":return "Steam";
             case "nintendo":return "Nintendo";
+            case "playstation":case "psn":return "PlayStation";
             case "epic":return "Epic";
             case "gog":return "GOG";
             case "xbox":case "microsoft":return "Xbox";
-            case "playstation":return "PlayStation";
             case "pc":return "PC";
             case "other":return "Manual";
             case "emulated":return "Emulado";
@@ -956,6 +984,7 @@ public final class MainActivity extends AppCompatActivity {
             if(row.androidSeconds>0)labels.add("Android");
             if(row.steamSeconds>0)labels.add("Steam");
             if(row.nintendoSeconds>0)labels.add("Nintendo");
+            if(row.playstationSeconds>0)labels.add("PlayStation");
             if(row.epicSeconds>0)labels.add("Epic");
             if(row.emulatedSeconds>0)labels.add("Emulado");
             if(row.otherSeconds>0)labels.add(rowLibraryLabel(row));
@@ -975,6 +1004,7 @@ public final class MainActivity extends AppCompatActivity {
             addPlaytime(totals,"Android",row.androidSeconds);
             addPlaytime(totals,"Steam",row.steamSeconds);
             addPlaytime(totals,"Nintendo",row.nintendoSeconds);
+            addPlaytime(totals,"PlayStation",row.playstationSeconds);
             addPlaytime(totals,"Epic",row.epicSeconds);
             addPlaytime(totals,"Emulado",row.emulatedSeconds);
             addPlaytime(totals,rowLibraryLabel(row),row.otherSeconds);
@@ -985,6 +1015,13 @@ public final class MainActivity extends AppCompatActivity {
             out.append(entry.getKey()).append(": ").append(format(entry.getValue()));
         }
         return out.toString();
+    }
+
+    private LudexDb.GameRow psnVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants){
+            if(row.playstation&&db.getPsnInfo(row.id)!=null)return row;
+        }
+        return null;
     }
 
     private LudexDb.GameRow androidVariant(DisplayGame game){
@@ -1011,6 +1048,7 @@ public final class MainActivity extends AppCompatActivity {
             if(manual!=null&&!manual.imageUri.isBlank())score+=450;
             if(row.steam)score+=400;
             if(row.epic)score+=350;
+            if(row.playstation)score+=325;
             if(row.nintendo)score+=300;
             if(row.gameNative)score+=200;
             if(row.emulated)score+=100;
@@ -1048,6 +1086,18 @@ public final class MainActivity extends AppCompatActivity {
         String date=gameDateLabel(game);
         if(!date.isBlank())message+="\n"+date;
         if(!breakdown.isBlank())message+="\n\n"+breakdown;
+        LudexDb.GameRow psnRow=psnVariant(game);
+        if(psnRow!=null){
+            LudexDb.PsnInfo psn=db.getPsnInfo(psnRow.id);
+            if(psn!=null){
+                if(psn.trophiesDefined>0){
+                    message+="\nTroféus PSN: "+psn.trophiesEarned+"/"+psn.trophiesDefined+" · "+psn.trophyProgress+"%";
+                    if(psn.platinumEarned>0)message+=" · "+psn.platinumEarned+" platina";
+                }
+                if(psn.playCount>0)message+="\nInicializações PSN: "+psn.playCount;
+                if(psn.lastPlayedAt>0)message+="\nÚltima atividade PSN: "+formatDate(psn.lastPlayedAt);
+            }
+        }
         message+="\n\nStatus: "+game.status;
         new MaterialAlertDialogBuilder(this)
             .setTitle(game.title)
@@ -1857,6 +1907,195 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void updatePsnSyncInfo(){
+        boolean connected=!SecretStore.get(this,"psn.refresh_token").isEmpty();
+        long last=db.getSettingLong("psn.last_sync_ms",0);
+        if(!connected){
+            psnSyncInfo.setText("PSN não conectada. Importe horas totais, primeira/última atividade e troféus dos jogos jogados.");
+            return;
+        }
+        String suffix=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
+        long count=db.getSettingLong("psn.last_game_count",0);
+        psnSyncInfo.setText("PlayStation Network conectada"+suffix+(count>0?" · "+count+" jogos":""));
+    }
+
+    private void savePsnCredentials(PsnClient.Credentials credentials) throws Exception {
+        SecretStore.put(this,"psn.access_token",credentials.accessToken);
+        SecretStore.put(this,"psn.refresh_token",credentials.refreshToken);
+        db.setSetting("psn.access_expires_at_ms",Long.toString(credentials.accessExpiresAtMs));
+        db.setSetting("psn.refresh_expires_at_ms",Long.toString(credentials.refreshExpiresAtMs));
+    }
+
+    private void clearPsnCredentials(){
+        SecretStore.remove(this,"psn.access_token");
+        SecretStore.remove(this,"psn.refresh_token");
+        db.setSetting("psn.access_expires_at_ms","0");
+        db.setSetting("psn.refresh_expires_at_ms","0");
+        updatePsnSyncInfo();
+    }
+
+    private PsnClient.Credentials validPsnCredentials() throws Exception {
+        String access=SecretStore.get(this,"psn.access_token");
+        String refresh=SecretStore.get(this,"psn.refresh_token");
+        long accessExpires=db.getSettingLong("psn.access_expires_at_ms",0);
+        long refreshExpires=db.getSettingLong("psn.refresh_expires_at_ms",0);
+        if(refresh.isEmpty())throw new IllegalStateException("PSN não conectada");
+
+        if(!access.isEmpty()&&accessExpires>System.currentTimeMillis()+5*60*1000L){
+            return new PsnClient.Credentials(access,refresh,accessExpires,refreshExpires);
+        }
+
+        PsnClient.Credentials renewed=PsnClient.refresh(refresh);
+        savePsnCredentials(renewed);
+        return renewed;
+    }
+
+    private static final class PsnSyncResult{
+        final int imported,total,withTrophies;
+        PsnSyncResult(int imported,int total,int withTrophies){
+            this.imported=imported;this.total=total;this.withTrophies=withTrophies;
+        }
+    }
+
+    private PsnSyncResult syncPsnPlayHistoryNow() throws Exception {
+        PsnClient.Credentials credentials=validPsnCredentials();
+        List<PsnClient.Title> titles=PsnClient.getPlayedGames(credentials);
+        int withTrophies=0;
+        for(PsnClient.Title title:titles)if(title.trophiesDefined>0)withTrophies++;
+        int imported=db.syncPsnPlayHistory(titles);
+        db.setSetting("psn.last_sync_ms",Long.toString(System.currentTimeMillis()));
+        db.setSetting("psn.last_game_count",Integer.toString(titles.size()));
+        db.setSetting("psn.last_trophy_count",Integer.toString(withTrophies));
+        return new PsnSyncResult(imported,titles.size(),withTrophies);
+    }
+
+    private void syncPsnPlayHistory(boolean notify){
+        if(SecretStore.get(this,"psn.refresh_token").isEmpty()){
+            if(notify)showPsnConnect();
+            return;
+        }
+        if(notify)toast("Sincronizando histórico PlayStation…");
+        io.execute(()->{
+            try{
+                PsnSyncResult result=syncPsnPlayHistoryNow();
+                runOnUiThread(()->{
+                    updatePsnSyncInfo();
+                    if(notify){
+                        String msg=result.total+" jogos PlayStation sincronizados";
+                        if(result.withTrophies>0)msg+=" · "+result.withTrophies+" com troféus";
+                        toast(msg);
+                    }
+                    reloadLibraryAsync();
+                });
+            }catch(Exception e){
+                String msg=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                if(msg.contains("HTTP 401")||msg.contains("HTTP 403")||msg.toLowerCase(Locale.ROOT).contains("invalid_grant")){
+                    clearPsnCredentials();
+                }
+                runOnUiThread(()->{
+                    updatePsnSyncInfo();
+                    toast("Falha na PSN: "+msg);
+                });
+            }
+        });
+    }
+
+    private void showPsnConnect(){
+        boolean connected=!SecretStore.get(this,"psn.refresh_token").isEmpty();
+        if(connected){
+            new MaterialAlertDialogBuilder(this)
+                .setTitle("PlayStation Network")
+                .setMessage("A PSN está conectada. O Ludex lê jogos jogados, playtime, primeira/última atividade e resumo de troféus. A integração usa endpoints da própria Sony que não são documentados como API pública para terceiros e pode exigir ajustes se a Sony os alterar.")
+                .setNegativeButton("Fechar",null)
+                .setNeutralButton("Desconectar",(d,w)->{
+                    clearPsnCredentials();
+                    toast("PSN desconectada");
+                })
+                .setPositiveButton("Sincronizar",(d,w)->syncPsnPlayHistory(true))
+                .show();
+            return;
+        }
+
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,8,pad,0);
+
+        TextView login=new TextView(this);
+        login.setText("1. Entrar no site oficial PlayStation ↗");
+        login.setTextColor(getColor(R.color.ludex_accent));
+        login.setTextSize(15);
+        login.setPadding(0,pad/3,0,pad/2);
+        login.setOnClickListener(v->{
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(PsnClient.signInUrl())));}
+            catch(Exception e){toast("Não foi possível abrir o site PlayStation");}
+        });
+        wrap.addView(login,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView npssoLink=new TextView(this);
+        npssoLink.setText("2. Depois do login, abrir página NPSSO ↗");
+        npssoLink.setTextColor(getColor(R.color.ludex_accent));
+        npssoLink.setTextSize(15);
+        npssoLink.setPadding(0,0,0,pad/2);
+        npssoLink.setOnClickListener(v->{
+            try{
+                startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(PsnClient.npssoUrl())));
+                toast("Copie o JSON com o campo npsso e volte ao Ludex");
+            }catch(Exception e){toast("Não foi possível abrir a página NPSSO");}
+        });
+        wrap.addView(npssoLink,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText input=new EditText(this);
+        input.setSingleLine(false);
+        input.setMinLines(3);
+        input.setMaxLines(6);
+        input.setHint("3. Cole o JSON {\"npsso\":\"...\"} ou somente o token");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        wrap.addView(input,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView note=new TextView(this);
+        note.setText("O NPSSO dá acesso à sua sessão e deve ser tratado como senha. O Ludex usa esse valor apenas para obter tokens PSN e não salva o NPSSO. Access/refresh tokens ficam criptografados pelo Android Keystore.");
+        note.setTextColor(getColor(R.color.ludex_muted));
+        note.setTextSize(12);
+        note.setPadding(0,pad/2,0,0);
+        wrap.addView(note,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle("Conectar PlayStation Network")
+            .setMessage("O login e a geração do NPSSO acontecem nos domínios oficiais da Sony. A integração é experimental porque esses endpoints não são uma API pública documentada para terceiros.")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Conectar",null)
+            .create();
+
+        dialog.setOnShowListener(ignored->dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String raw=input.getText()==null?"":input.getText().toString().trim();
+            if(raw.isEmpty()){input.setError("Cole o NPSSO");return;}
+            dialog.dismiss();
+            connectPsn(raw);
+        }));
+        dialog.show();
+    }
+
+    private void connectPsn(String rawNpsso){
+        toast("Conectando à PlayStation Network…");
+        io.execute(()->{
+            try{
+                PsnClient.Credentials credentials=PsnClient.exchangeNpsso(rawNpsso);
+                savePsnCredentials(credentials);
+                PsnSyncResult result=syncPsnPlayHistoryNow();
+                runOnUiThread(()->{
+                    updatePsnSyncInfo();
+                    toast("PSN conectada · "+result.total+" jogos sincronizados");
+                    reloadLibraryAsync();
+                });
+            }catch(Exception e){
+                String msg=e.getMessage()==null?"erro desconhecido":e.getMessage();
+                runOnUiThread(()->toast("Falha ao conectar PSN: "+msg));
+            }
+        });
+    }
+
     private void updateNintendoSyncInfo(){
         boolean connected=!SecretStore.get(this,"nintendo.session_token").isEmpty();
         long last=db.getSettingLong("nintendo.last_sync_ms",0);
@@ -2122,6 +2361,11 @@ public final class MainActivity extends AppCompatActivity {
             loadArtworkAsync("epic:"+epicInfo.appName,view,expectedTag,()->EpicArtworkLoader.load(this,epicInfo.appName,epicInfo.imageUrl));
             return;
         }
+        LudexDb.PsnInfo psnInfo=db.getPsnInfo(g.id);
+        if(psnInfo!=null&&!psnInfo.imageUrl.isBlank()){
+            loadArtworkAsync("psn:"+psnInfo.titleId,view,expectedTag,()->PsnArtworkLoader.load(this,psnInfo.titleId,psnInfo.imageUrl));
+            return;
+        }
         if("nintendo".equals(g.source)){
             LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
             if(n!=null&&!n.imageUrl.isBlank()){
@@ -2183,7 +2427,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private String providerLabel(String source){
         if(source==null)return "Ludex";
-        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";case "nintendo-manual":return "Nintendo";case "xbox-manual":return "Xbox";case "playstation-manual":return "PlayStation";case "pc-manual":return "PC";case "other-manual":return "Manual";default:return source;}
+        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "psn":return "PlayStation";case "playstation":return "PlayStation";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";case "nintendo-manual":return "Nintendo";case "xbox-manual":return "Xbox";case "playstation-manual":return "PlayStation";case "pc-manual":return "PC";case "other-manual":return "Manual";default:return source;}
     }
     static String format(long sec){long h=sec/3600,m=(sec%3600)/60;return h>0?h+"h "+m+"min":m+"min";}
     private void toast(String s){Snackbar.make(findViewById(R.id.root),s,Snackbar.LENGTH_LONG).show();}

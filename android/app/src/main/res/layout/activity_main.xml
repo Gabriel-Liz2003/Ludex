@@ -150,6 +150,23 @@
                     android:text="Ver pendências Epic"/>
 
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp" android:text="PlayStation Network"
+                    android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
+                <TextView android:id="@+id/psn_sync_info" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Conecte sua PSN para importar jogos, horas totais, primeira/última atividade e troféus."
+                    android:textColor="@color/ludex_muted" android:textSize="13sp"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/psn_connect"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Conectar PlayStation Network"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/psn_sync"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Sincronizar histórico PlayStation"/>
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="20dp" android:text="Conta Nintendo"
                     android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
                 <TextView android:id="@+id/nintendo_sync_info" android:layout_width="match_parent" android:layout_height="wrap_content"
