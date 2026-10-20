@@ -34,6 +34,7 @@ public final class MainActivity extends AppCompatActivity {
     private enum LibraryFilter {
         ALL("all","Todas"),
         ANDROID("android","Android"),
+        RENPY("renpy","Ren’Py · privada"),
         STEAM("steam","Steam"),
         NINTENDO("nintendo","Nintendo"),
         PLAYSTATION("playstation","PlayStation"),
@@ -56,7 +57,7 @@ public final class MainActivity extends AppCompatActivity {
         final ArrayList<LudexDb.GameRow> variants=new ArrayList<>();
         String title="",status="Quero jogar";
         long seconds,firstActivityAt,acquiredAt,lastPlayedAt,firstSeenAt;
-        boolean favorite;
+        boolean favorite,renpy;
         LudexDb.GameRow primary;
 
         DisplayGame(String key){this.key=key;}
@@ -92,6 +93,7 @@ public final class MainActivity extends AppCompatActivity {
     private LibraryFilter libraryFilter=LibraryFilter.ALL;
     private String pendingManualArtworkUri="";
     private TextView pendingManualArtworkInfo;
+    private String pendingRenpyGameId;
     private static final int SHIZUKU_GAMENATIVE_REQUEST=4201;
     private static final int SHIZUKU_EDEN_REQUEST=4202;
 
@@ -184,6 +186,36 @@ public final class MainActivity extends AppCompatActivity {
             catch(Exception ignored){}
             pendingManualArtworkUri=uri.toString();
             if(pendingManualArtworkInfo!=null)pendingManualArtworkInfo.setText("Capa selecionada");
+        });
+
+    private final ActivityResultLauncher<Intent> renpySaveLauncher=registerForActivityResult(
+        new ActivityResultContracts.StartActivityForResult(), result -> {
+            String gameId=pendingRenpyGameId;
+            pendingRenpyGameId=null;
+            if(gameId==null||result.getResultCode()!=RESULT_OK||result.getData()==null)return;
+            Intent data=result.getData();
+            ArrayList<Uri> picked=new ArrayList<>();
+            if(data.getClipData()!=null){
+                for(int i=0;i<data.getClipData().getItemCount();i++)picked.add(data.getClipData().getItemAt(i).getUri());
+            }else if(data.getData()!=null)picked.add(data.getData());
+            io.execute(()->{
+                long best=0;int valid=0;
+                for(Uri uri:picked){
+                    try(InputStream input=getContentResolver().openInputStream(uri)){
+                        long seconds=RenpySaveReader.readRuntimeSeconds(input);
+                        best=Math.max(best,seconds);
+                        valid++;
+                    }catch(Exception ignored){}
+                }
+                final int count=valid;
+                final long recovered=best;
+                if(recovered>0)db.setImportedPlaytime(gameId,"android-renpy-save",recovered);
+                runOnUiThread(()->{
+                    if(count==0)toast("Nenhum save com _game_runtime válido. Alguns jogos/versões não gravam esse dado.");
+                    else toast(count+" save(s) lidos · maior tempo: "+format(recovered)+" (não somados)");
+                    reloadLibraryAsync();
+                });
+            });
         });
 
     private final ActivityResultLauncher<Intent> importLauncher=registerForActivityResult(
@@ -294,6 +326,7 @@ public final class MainActivity extends AppCompatActivity {
     private void setupUi(){
         sortByPlaytime="playtime".equals(db.getSetting("library.sort","title"));
         libraryFilter=LibraryFilter.fromId(db.getSetting("library.filter","all"));
+        if(libraryFilter==LibraryFilter.RENPY)libraryFilter=LibraryFilter.ALL; // Nunca reabrir coleção privada automaticamente.
         updateSortButton();
         updateLibraryFilterButton();
         findViewById(R.id.refresh).setOnClickListener(v->refreshAllPlaytimeAsync());
@@ -305,6 +338,7 @@ public final class MainActivity extends AppCompatActivity {
         });
         findViewById(R.id.library_filter).setOnClickListener(v->showLibraryFilter());
         findViewById(R.id.manual_add).setOnClickListener(v->showManualGameDialog(null));
+        findViewById(R.id.renpy_manage).setOnClickListener(v->showRenpyAppPicker());
         findViewById(R.id.usage_access).setOnClickListener(v->openUsageAccess());
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
@@ -464,6 +498,8 @@ public final class MainActivity extends AppCompatActivity {
     private void updateLibraryFilterButton(){
         Button filter=findViewById(R.id.library_filter);
         filter.setText("Biblioteca: "+libraryFilter.label);
+        View manage=findViewById(R.id.renpy_manage);
+        if(manage!=null)manage.setVisibility(libraryFilter==LibraryFilter.RENPY&&tab==Tab.LIBRARY?View.VISIBLE:View.GONE);
     }
 
     private void showLibraryFilter(){
@@ -478,7 +514,7 @@ public final class MainActivity extends AppCompatActivity {
             .setTitle("Biblioteca")
             .setSingleChoiceItems(labels,selected,(dialog,which)->{
                 libraryFilter=filters[which];
-                db.setSetting("library.filter",libraryFilter.id);
+                db.setSetting("library.filter",libraryFilter==LibraryFilter.RENPY?"all":libraryFilter.id);
                 updateLibraryFilterButton();
                 dialog.dismiss();
                 renderCurrent();
@@ -674,6 +710,7 @@ public final class MainActivity extends AppCompatActivity {
         list.setVisibility(sync?View.GONE:View.VISIBLE);
         boolean gamesTab=tab==Tab.LIBRARY||tab==Tab.ANDROID||tab==Tab.EMULATED;
         findViewById(R.id.library_controls).setVisibility(gamesTab?View.VISIBLE:View.GONE);
+        updateLibraryFilterButton();
         emptyState.setVisibility(View.GONE);
         if(sync){
             syncInfo.setText((hasUsageAccess()?"Acesso de uso concedido. ":"Acesso de uso pendente. ")+
@@ -700,7 +737,7 @@ public final class MainActivity extends AppCompatActivity {
         List<DisplayGame> grouped=buildDisplayGames(games);
         int played=0;long seconds=0;
         for(DisplayGame game:grouped){
-            if(game.seconds<=0)continue;
+            if(game.renpy||game.seconds<=0)continue;
             played++;
             seconds+=game.seconds;
         }
@@ -717,9 +754,22 @@ public final class MainActivity extends AppCompatActivity {
             String pkg=r.activityInfo.packageName;
             if(pkg.equals(getPackageName())||!seen.add(pkg)||EmulatorRegistry.isKnown(pkg))continue;
             ApplicationInfo ai=r.activityInfo.applicationInfo;
-            if(Build.VERSION.SDK_INT>=26&&ai.category!=ApplicationInfo.CATEGORY_GAME)continue;
-            String title=r.loadLabel(pm).toString();
-            db.upsertAndroidGame(pkg,title,true);
+            Boolean manual=db.renpyManualOverride(pkg);
+            boolean renpy=manual!=null?manual:db.isRenpyPackage(pkg);
+            if(manual==null){
+                long stamp=0;
+                try{stamp=pm.getPackageInfo(pkg,0).lastUpdateTime;}catch(Exception ignored){}
+                long checked=db.getSettingLong("renpy.checked."+pkg,-1);
+                if(stamp<=0||checked!=stamp){
+                    // Classificações positivas são persistentes para não expor títulos privados
+                    // caso um update altere o formato do APK e o detector deixe de reconhecer.
+                    renpy=renpy||RenpyApkDetector.isRenpy(ai);
+                    db.markRenpyPackage(pkg,renpy,false);
+                    if(stamp>0)db.setSetting("renpy.checked."+pkg,Long.toString(stamp));
+                }
+            }
+            if(ai.category!=ApplicationInfo.CATEGORY_GAME&&!renpy)continue;
+            db.upsertAndroidGame(pkg,r.loadLabel(pm).toString(),true);
         }
     }
 
@@ -778,7 +828,7 @@ public final class MainActivity extends AppCompatActivity {
             if(!db.hasAndroidGame(pkg)){
                 try{
                     ApplicationInfo ai=pm.getApplicationInfo(pkg,0);
-                    if(Build.VERSION.SDK_INT>=26&&ai.category==ApplicationInfo.CATEGORY_GAME){
+                    if(ai.category==ApplicationInfo.CATEGORY_GAME||db.isRenpyPackage(pkg)){
                         db.upsertAndroidGame(pkg,pm.getApplicationLabel(ai).toString(),true);
                     }else continue;
                 }catch(Exception ignored){continue;}
@@ -826,11 +876,12 @@ public final class MainActivity extends AppCompatActivity {
     private List<DisplayGame> buildDisplayGames(List<LudexDb.GameRow> rows){
         LinkedHashMap<String,DisplayGame> grouped=new LinkedHashMap<>();
         for(LudexDb.GameRow row:rows){
-            String key=canonicalGameTitle(row.title);
+            String key=(row.renpy?"private-renpy:":"")+canonicalGameTitle(row.title);
             if(key.isEmpty())key="id:"+row.id;
             DisplayGame game=grouped.computeIfAbsent(key,DisplayGame::new);
             game.variants.add(row);
             game.seconds+=Math.max(0,row.seconds);
+            game.renpy|=row.renpy;
             game.favorite|=row.favorite;
             game.firstActivityAt=minPositiveTime(game.firstActivityAt,row.firstActivityAt);
             game.acquiredAt=minPositiveTime(game.acquiredAt,row.acquiredAt);
@@ -885,6 +936,8 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private boolean rowMatchesLibrary(LudexDb.GameRow g,LibraryFilter filter){
+        if(filter==LibraryFilter.RENPY)return g.renpy;
+        if(g.renpy)return false;
         if(filter==LibraryFilter.ALL)return true;
         String source=sourceKey(g);
         switch(filter){
@@ -907,7 +960,8 @@ public final class MainActivity extends AppCompatActivity {
 
     private long rowPlaytimeForFilter(LudexDb.GameRow row,LibraryFilter filter){
         switch(filter){
-            case ALL:return Math.max(0,row.seconds);
+            case ALL:return row.renpy?0:Math.max(0,row.seconds);
+            case RENPY:return row.renpy?Math.max(0,row.androidSeconds):0;
             case ANDROID:return Math.max(0,row.androidSeconds);
             case STEAM:return Math.max(0,row.steamSeconds);
             case NINTENDO:return Math.max(0,row.nintendoSeconds);
@@ -934,13 +988,15 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private long displayPlaytime(DisplayGame game){
-        if(libraryFilter==LibraryFilter.ALL)return Math.max(0,game.seconds);
+        if(libraryFilter==LibraryFilter.ALL)return game.renpy?0:Math.max(0,game.seconds);
         long total=0;
         for(LudexDb.GameRow row:game.variants)total+=rowPlaytimeForFilter(row,libraryFilter);
         return total;
     }
 
     private boolean groupMatchesLibrary(DisplayGame game,LibraryFilter filter){
+        if(game.renpy)return filter==LibraryFilter.RENPY;
+        if(filter==LibraryFilter.RENPY)return false;
         if(filter==LibraryFilter.ALL)return game.seconds>0;
         for(LudexDb.GameRow row:game.variants){
             if(rowHasPlaytimeForFilter(row,filter))return true;
@@ -949,6 +1005,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private boolean groupMatchesTab(DisplayGame game,Tab mode){
+        if(game.renpy)return mode==Tab.LIBRARY&&libraryFilter==LibraryFilter.RENPY;
         if(mode!=Tab.LIBRARY&&mode!=Tab.ANDROID&&mode!=Tab.EMULATED)return true;
         for(LudexDb.GameRow row:game.variants){
             if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
@@ -1111,12 +1168,59 @@ public final class MainActivity extends AppCompatActivity {
             .show();
     }
 
+    private void selectRenpySaves(LudexDb.GameRow row){
+        if(row==null)return;
+        pendingRenpyGameId=row.id;
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Importar saves Ren’Py")
+            .setMessage("Selecione um ou mais arquivos .save. O Ludex lê somente _game_runtime dos metadados JSON, usa o maior valor e não soma arquivos que podem representar a mesma partida. Esse tempo é parcial e combinado com o uso Android sem duplicação.")
+            .setNegativeButton("Cancelar",(d,w)->pendingRenpyGameId=null)
+            .setPositiveButton("Escolher arquivos",(d,w)->{
+                Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.setType("*/*");
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+                renpySaveLauncher.launch(intent);
+            }).show();
+    }
+
+    private void showRenpyAppPicker(){
+        PackageManager pm=getPackageManager();
+        Intent launcher=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        LinkedHashMap<String,String> candidates=new LinkedHashMap<>();
+        for(ResolveInfo r:pm.queryIntentActivities(launcher,0)){
+            String pkg=r.activityInfo.packageName;
+            if(pkg.equals(getPackageName())||EmulatorRegistry.isKnown(pkg)||db.isRenpyPackage(pkg))continue;
+            candidates.put(pkg,r.loadLabel(pm).toString()+" · "+pkg);
+        }
+        ArrayList<String> packages=new ArrayList<>(candidates.keySet());
+        packages.sort(Comparator.comparing(p->candidates.get(p),String.CASE_INSENSITIVE_ORDER));
+        String[] labels=new String[packages.size()];
+        for(int i=0;i<packages.size();i++)labels[i]=candidates.get(packages.get(i));
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Adicionar APK à coleção privada")
+            .setMessage("Escolha um aplicativo instalado que não foi reconhecido automaticamente como Ren’Py.")
+            .setItems(labels,(dialog,which)->{
+                String pkg=packages.get(which);
+                db.markRenpyPackage(pkg,true,true);
+                try{
+                    ApplicationInfo ai=pm.getApplicationInfo(pkg,0);
+                    db.upsertAndroidGame(pkg,pm.getApplicationLabel(ai).toString(),true);
+                    refreshAsync(true);
+                    toast("Adicionado à coleção privada");
+                }catch(Exception e){toast("Erro ao importar APK: "+e.getMessage());}
+            })
+            .setNegativeButton("Cancelar",null)
+            .show();
+    }
+
     private void showGameActions(DisplayGame game){
         ArrayList<String> actions=new ArrayList<>();
         actions.add("Alterar status");
         LudexDb.GameRow android=androidVariant(game);
         LudexDb.GameRow manual=manualVariant(game);
         if(android!=null)actions.add("Ajustar horas Android");
+        if(game.renpy){actions.add("Importar saves Ren’Py");actions.add("Tirar da coleção privada");}
         if(manual!=null){
             actions.add("Editar entrada manual");
             actions.add("Remover entrada manual");
@@ -1126,6 +1230,11 @@ public final class MainActivity extends AppCompatActivity {
             String action=actions.get(which);
             if("Alterar status".equals(action))showStatusPicker(game);
             else if("Ajustar horas Android".equals(action)&&android!=null)calibratePlaytime(android);
+            else if("Importar saves Ren’Py".equals(action)&&android!=null)selectRenpySaves(android);
+            else if("Tirar da coleção privada".equals(action)&&android!=null){
+                db.markRenpyPackage(android.packageName,false,true);
+                reloadLibraryAsync();
+            }
             else if("Editar entrada manual".equals(action)&&manual!=null)showManualGameDialog(manual);
             else if("Remover entrada manual".equals(action)&&manual!=null)confirmDeleteManualGame(game,manual);
             else if("Excluir da lista".equals(action))confirmHideGame(game);
@@ -2450,7 +2559,7 @@ public final class MainActivity extends AppCompatActivity {
         void filter(String query,Tab mode){
             shown.clear();String q=query==null?"":query.trim().toLowerCase(Locale.ROOT);
             for(DisplayGame g:all){
-                if(g.seconds<=0)continue;
+                if(g.seconds<=0&&!g.renpy)continue;
                 if(!groupMatchesTab(g,mode))continue;
                 if(!groupMatchesLibrary(g,libraryFilter))continue;
                 if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q)&&!librariesLabel(g).toLowerCase(Locale.ROOT).contains(q))continue;

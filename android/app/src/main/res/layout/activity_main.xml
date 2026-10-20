@@ -69,6 +69,14 @@
         </LinearLayout>
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/renpy_manage"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent" android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            android:text="Adicionar APK à coleção privada"/>
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/manual_add"
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="match_parent" android:layout_height="48dp"
