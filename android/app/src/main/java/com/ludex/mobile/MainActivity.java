@@ -896,7 +896,10 @@ public final class MainActivity extends AppCompatActivity {
             if(key.isEmpty())key="id:"+row.id;
             DisplayGame game=grouped.computeIfAbsent(key,DisplayGame::new);
             game.variants.add(row);
-            game.seconds+=Math.max(0,row.seconds);
+            // An APK Ren'Py e um backup dos saves podem conter o mesmo tempo.
+            // Evite duplicar essas horas quando os títulos são agrupados.
+            if(row.renpy)game.seconds=Math.max(game.seconds,Math.max(0,row.seconds));
+            else game.seconds+=Math.max(0,row.seconds);
             game.renpy|=row.renpy;
             game.favorite|=row.favorite;
             game.firstActivityAt=minPositiveTime(game.firstActivityAt,row.firstActivityAt);
@@ -1006,7 +1009,11 @@ public final class MainActivity extends AppCompatActivity {
     private long displayPlaytime(DisplayGame game){
         if(libraryFilter==LibraryFilter.ALL)return game.renpy?0:Math.max(0,game.seconds);
         long total=0;
-        for(LudexDb.GameRow row:game.variants)total+=rowPlaytimeForFilter(row,libraryFilter);
+        for(LudexDb.GameRow row:game.variants){
+            long value=rowPlaytimeForFilter(row,libraryFilter);
+            if(libraryFilter==LibraryFilter.RENPY)total=Math.max(total,value);
+            else total+=value;
+        }
         return total;
     }
 
@@ -1072,6 +1079,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private String playtimeBreakdown(DisplayGame game){
+        if(game.renpy)return "Android (APK/saves, sem duplicar): "+format(displayPlaytime(game));
         LinkedHashMap<String,Long> totals=new LinkedHashMap<>();
         for(LudexDb.GameRow row:game.variants){
             addPlaytime(totals,"Android",row.androidSeconds);
