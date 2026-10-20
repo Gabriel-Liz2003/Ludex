@@ -188,6 +188,18 @@ public final class MainActivity extends AppCompatActivity {
             if(pendingManualArtworkInfo!=null)pendingManualArtworkInfo.setText("Capa selecionada");
         });
 
+    private final ActivityResultLauncher<Uri> renpyFolderLauncher=registerForActivityResult(
+        new ActivityResultContracts.OpenDocumentTree(), uri -> {
+            if(uri==null)return;
+            try{
+                getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            }catch(Exception e){
+                toast("Não foi possível manter a permissão da pasta. Tente selecionar novamente.");
+            }
+            db.setSetting("renpy.saves.tree_uri",uri.toString());
+            scanRenpySaveFolder(uri);
+        });
+
     private final ActivityResultLauncher<Intent> renpySaveLauncher=registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(), result -> {
             String gameId=pendingRenpyGameId;
@@ -339,6 +351,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.library_filter).setOnClickListener(v->showLibraryFilter());
         findViewById(R.id.manual_add).setOnClickListener(v->showManualGameDialog(null));
         findViewById(R.id.renpy_manage).setOnClickListener(v->showRenpyAppPicker());
+        findViewById(R.id.renpy_import_folder).setOnClickListener(v->chooseRenpySaveFolder());
         findViewById(R.id.usage_access).setOnClickListener(v->openUsageAccess());
         findViewById(R.id.sync_import).setOnClickListener(v->pickImport());
         findViewById(R.id.sync_export).setOnClickListener(v->pickExport());
@@ -499,7 +512,10 @@ public final class MainActivity extends AppCompatActivity {
         Button filter=findViewById(R.id.library_filter);
         filter.setText("Biblioteca: "+libraryFilter.label);
         View manage=findViewById(R.id.renpy_manage);
-        if(manage!=null)manage.setVisibility(libraryFilter==LibraryFilter.RENPY&&tab==Tab.LIBRARY?View.VISIBLE:View.GONE);
+        boolean privateVisible=libraryFilter==LibraryFilter.RENPY&&tab==Tab.LIBRARY;
+        if(manage!=null)manage.setVisibility(privateVisible?View.VISIBLE:View.GONE);
+        View importFolder=findViewById(R.id.renpy_import_folder);
+        if(importFolder!=null)importFolder.setVisibility(privateVisible?View.VISIBLE:View.GONE);
     }
 
     private void showLibraryFilter(){
@@ -1184,6 +1200,84 @@ public final class MainActivity extends AppCompatActivity {
             }).show();
     }
 
+    private void chooseRenpySaveFolder(){
+        String existing=db.getSetting("renpy.saves.tree_uri","");
+        if(existing.isBlank()){
+            renpyFolderLauncher.launch(null);
+            return;
+        }
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Recuperar biblioteca Ren’Py")
+            .setMessage("Uma pasta de saves já foi selecionada. Você pode reexaminar essa pasta ou escolher outra. Os jogos antigos ficam somente nesta coleção privada e não são exportados para o PC.")
+            .setNegativeButton("Cancelar",null)
+            .setNeutralButton("Outra pasta",(d,w)->renpyFolderLauncher.launch(null))
+            .setPositiveButton("Reexaminar",(d,w)->scanRenpySaveFolder(Uri.parse(existing)))
+            .show();
+    }
+
+    private void scanRenpySaveFolder(Uri treeUri){
+        toast("Procurando jogos antigos nos saves Ren’Py…");
+        io.execute(()->{
+            try{
+                RenpySaveFolderScanner.Result result=RenpySaveFolderScanner.scan(this,treeUri);
+                int imported=0,withTime=0,saveCount=0;
+                for(RenpySaveFolderScanner.GameFolder folder:result.games){
+                    String gameId=db.upsertRenpySaveFolder(folder.folderKey,folder.title,folder.maxRuntimeSeconds);
+                    if(gameId.isBlank())continue;
+                    imported++;
+                    saveCount+=folder.savesFound;
+                    if(folder.maxRuntimeSeconds>0)withTime++;
+                }
+                final int total=imported, timed=withTime, files=saveCount;
+                final boolean limited=result.limitReached;
+                runOnUiThread(()->{
+                    reloadLibraryAsync();
+                    String message=total+" jogos localizados · "+timed+" com tempo recuperável · "+files+" saves encontrados";
+                    if(limited)message+=" · limite de leitura atingido";
+                    new MaterialAlertDialogBuilder(this)
+                        .setTitle("Recuperação Ren’Py")
+                        .setMessage(message+"\n\nSaves sem _game_runtime também entram na coleção, mas não ganham horas inventadas. O maior tempo por jogo é utilizado para evitar duplicidade entre saves.")
+                        .setPositiveButton("OK",null)
+                        .show();
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha ao ler a pasta Ren’Py: "+e.getMessage()));
+            }
+        });
+    }
+
+    private LudexDb.GameRow renpySaveVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants){
+            if("renpy-save".equals(row.source))return row;
+        }
+        return null;
+    }
+
+    private void renameRenpySaveGame(LudexDb.GameRow row){
+        EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setText(row.title);
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout wrapper=new LinearLayout(this);
+        wrapper.setPadding(pad,8,pad,0);
+        wrapper.addView(input,new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle("Nome do jogo dos saves")
+            .setView(wrapper)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Salvar",null)
+            .create();
+        dialog.setOnShowListener(v->dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->{
+            String title=input.getText()==null?"":input.getText().toString().trim();
+            if(title.isBlank()){input.setError("Informe um nome");return;}
+            db.renameRenpySaveGame(row.id,title);
+            dialog.dismiss();
+            reloadLibraryAsync();
+        }));
+        dialog.show();
+    }
+
     private void showRenpyAppPicker(){
         PackageManager pm=getPackageManager();
         Intent launcher=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
@@ -1219,8 +1313,10 @@ public final class MainActivity extends AppCompatActivity {
         actions.add("Alterar status");
         LudexDb.GameRow android=androidVariant(game);
         LudexDb.GameRow manual=manualVariant(game);
+        LudexDb.GameRow saveFolder=renpySaveVariant(game);
         if(android!=null)actions.add("Ajustar horas Android");
-        if(game.renpy){actions.add("Importar saves Ren’Py");actions.add("Tirar da coleção privada");}
+        if(saveFolder!=null)actions.add("Renomear jogo recuperado");
+        if(game.renpy&&android!=null){actions.add("Importar saves Ren’Py");actions.add("Tirar da coleção privada");}
         if(manual!=null){
             actions.add("Editar entrada manual");
             actions.add("Remover entrada manual");
@@ -1231,6 +1327,7 @@ public final class MainActivity extends AppCompatActivity {
             if("Alterar status".equals(action))showStatusPicker(game);
             else if("Ajustar horas Android".equals(action)&&android!=null)calibratePlaytime(android);
             else if("Importar saves Ren’Py".equals(action)&&android!=null)selectRenpySaves(android);
+            else if("Renomear jogo recuperado".equals(action)&&saveFolder!=null)renameRenpySaveGame(saveFolder);
             else if("Tirar da coleção privada".equals(action)&&android!=null){
                 db.markRenpyPackage(android.packageName,false,true);
                 reloadLibraryAsync();
