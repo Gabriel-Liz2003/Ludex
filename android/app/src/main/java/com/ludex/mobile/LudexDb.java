@@ -237,6 +237,36 @@ public final class LudexDb extends SQLiteOpenHelper {
         getWritableDatabase().insertWithOnConflict("renpy_apps",null,v,SQLiteDatabase.CONFLICT_REPLACE);
     }
 
+    /**
+     * Imports a game inferred from a user-selected Ren'Py save folder, even if the APK
+     * was uninstalled years ago. Folder URIs themselves are not stored in the game row.
+     */
+    public String upsertRenpySaveFolder(String folderKey,String folderName,long runtimeSeconds){
+        if(folderKey==null||folderKey.isBlank()||folderName==null||folderName.isBlank())return "";
+        String id="renpy-save:"+UUID.nameUUIDFromBytes(folderKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        long now=System.currentTimeMillis();
+        ContentValues g=new ContentValues();
+        g.put("id",id);
+        g.put("title",folderName.trim());
+        g.put("platform","Android");
+        g.put("source","renpy-save");
+        g.put("installed",0);
+        g.put("first_seen_at",now);
+        g.put("updated_at",now);
+        getWritableDatabase().insertWithOnConflict("games",null,g,SQLiteDatabase.CONFLICT_IGNORE);
+        // Preserve any name the user previously corrected.
+        if(runtimeSeconds>0)setImportedPlaytime(id,"android-renpy-save",runtimeSeconds);
+        return id;
+    }
+
+    public void renameRenpySaveGame(String id,String name){
+        if(id==null||!id.startsWith("renpy-save:")||name==null||name.trim().isEmpty())return;
+        ContentValues v=new ContentValues();
+        v.put("title",name.trim());
+        v.put("updated_at",System.currentTimeMillis());
+        getWritableDatabase().update("games",v,"id=? AND source='renpy-save'",new String[]{id});
+    }
+
     public String upsertAndroidGame(String pkg,String title,boolean installed){
         String id="android:"+pkg; long now=System.currentTimeMillis();
         ContentValues v=new ContentValues();v.put("id",id);v.put("title",title);v.put("platform","Android");v.put("source","android");v.put("package_name",pkg);v.put("installed",installed?1:0);v.put("first_seen_at",now);v.put("updated_at",now);
@@ -282,7 +312,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT first_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT last_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
-            "CASE WHEN g.package_name IS NOT NULL AND EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1) THEN 1 ELSE 0 END "+
+            "CASE WHEN lower(g.source)='renpy-save' OR (g.package_name IS NOT NULL AND EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)) THEN 1 ELSE 0 END "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
             while(c.moveToNext()){
@@ -934,10 +964,10 @@ public final class LudexDb extends SQLiteOpenHelper {
         return root;
     }
     private JSONArray gamesJson() throws JSONException {
-        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,title,platform,source,package_name,installed,favorite,status,first_seen_at,first_opened_at,updated_at FROM games g WHERE NOT EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("title",c.getString(1));o.put("platform",c.getString(2));o.put("source",c.getString(3));if(!c.isNull(4))o.put("package_name",c.getString(4));o.put("installed",c.getInt(5));o.put("favorite",c.getInt(6));o.put("status",c.getString(7));o.put("first_seen_at_ms",c.getLong(8));o.put("first_opened_at_ms",c.getLong(9));o.put("updated_at_ms",c.getLong(10));a.put(o);}}return a;
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,title,platform,source,package_name,installed,favorite,status,first_seen_at,first_opened_at,updated_at FROM games g WHERE g.source!='renpy-save' AND NOT EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("title",c.getString(1));o.put("platform",c.getString(2));o.put("source",c.getString(3));if(!c.isNull(4))o.put("package_name",c.getString(4));o.put("installed",c.getInt(5));o.put("favorite",c.getInt(6));o.put("status",c.getString(7));o.put("first_seen_at_ms",c.getLong(8));o.put("first_opened_at_ms",c.getLong(9));o.put("updated_at_ms",c.getLong(10));a.put(o);}}return a;
     }
     private JSONArray sessionsJson() throws JSONException {
-        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,game_id,package_name,started_at,ended_at,duration_seconds,device,provider FROM play_sessions s WHERE NOT EXISTS(SELECT 1 FROM games g JOIN renpy_apps ra ON ra.package_name=g.package_name AND ra.classified=1 WHERE g.id=s.game_id)",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("game_id",c.getString(1));if(!c.isNull(2))o.put("package_name",c.getString(2));o.put("started_at_ms",c.getLong(3));o.put("ended_at_ms",c.getLong(4));o.put("duration_seconds",c.getLong(5));o.put("device",c.getString(6));o.put("provider",c.getString(7));a.put(o);}}return a;
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,game_id,package_name,started_at,ended_at,duration_seconds,device,provider FROM play_sessions s WHERE s.game_id NOT LIKE 'renpy-save:%' AND NOT EXISTS(SELECT 1 FROM games g WHERE g.id=s.game_id AND (g.source='renpy-save' OR EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)))",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("id",c.getString(0));o.put("game_id",c.getString(1));if(!c.isNull(2))o.put("package_name",c.getString(2));o.put("started_at_ms",c.getLong(3));o.put("ended_at_ms",c.getLong(4));o.put("duration_seconds",c.getLong(5));o.put("device",c.getString(6));o.put("provider",c.getString(7));a.put(o);}}return a;
     }
     private JSONArray manualGamesJson() throws JSONException {
         JSONArray a=new JSONArray();
@@ -953,7 +983,7 @@ public final class LudexDb extends SQLiteOpenHelper {
     }
 
     private JSONArray importedPlaytimeJson() throws JSONException {
-        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,provider,seconds,updated_at FROM imported_playtime p WHERE NOT EXISTS(SELECT 1 FROM games g JOIN renpy_apps ra ON ra.package_name=g.package_name AND ra.classified=1 WHERE g.id=p.game_id)",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("game_id",c.getString(0));o.put("provider",c.getString(1));o.put("seconds",c.getLong(2));o.put("updated_at_ms",c.getLong(3));a.put(o);}}return a;
+        JSONArray a=new JSONArray();try(Cursor c=getReadableDatabase().rawQuery("SELECT game_id,provider,seconds,updated_at FROM imported_playtime p WHERE p.game_id NOT LIKE 'renpy-save:%' AND NOT EXISTS(SELECT 1 FROM games g WHERE g.id=p.game_id AND (g.source='renpy-save' OR EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)))",null)){while(c.moveToNext()){JSONObject o=new JSONObject();o.put("game_id",c.getString(0));o.put("provider",c.getString(1));o.put("seconds",c.getLong(2));o.put("updated_at_ms",c.getLong(3));a.put(o);}}return a;
     }
 
     public SyncResult importBundle(JSONObject root) throws JSONException {

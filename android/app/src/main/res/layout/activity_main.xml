@@ -77,6 +77,14 @@
             android:text="Adicionar APK à coleção privada"/>
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/renpy_import_folder"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent" android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            android:text="Recuperar jogos pela pasta de saves"/>
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/manual_add"
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="match_parent" android:layout_height="48dp"
