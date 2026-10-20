@@ -761,7 +761,9 @@ public final class MainActivity extends AppCompatActivity {
                 try{stamp=pm.getPackageInfo(pkg,0).lastUpdateTime;}catch(Exception ignored){}
                 long checked=db.getSettingLong("renpy.checked."+pkg,-1);
                 if(stamp<=0||checked!=stamp){
-                    renpy=RenpyApkDetector.isRenpy(ai);
+                    // Classificações positivas são persistentes para não expor títulos privados
+                    // caso um update altere o formato do APK e o detector deixe de reconhecer.
+                    renpy=renpy||RenpyApkDetector.isRenpy(ai);
                     db.markRenpyPackage(pkg,renpy,false);
                     if(stamp>0)db.setSetting("renpy.checked."+pkg,Long.toString(stamp));
                 }
@@ -1204,7 +1206,7 @@ public final class MainActivity extends AppCompatActivity {
                 try{
                     ApplicationInfo ai=pm.getApplicationInfo(pkg,0);
                     db.upsertAndroidGame(pkg,pm.getApplicationLabel(ai).toString(),true);
-                    reloadLibraryAsync();
+                    refreshAsync(true);
                     toast("Adicionado à coleção privada");
                 }catch(Exception e){toast("Erro ao importar APK: "+e.getMessage());}
             })
