@@ -2233,26 +2233,54 @@ public final class MainActivity extends AppCompatActivity {
             String hours=game.seconds<0?"horas não disponíveis":format(game.seconds);
             names[i]=game.name+" · "+hours;
         }
-        new MaterialAlertDialogBuilder(this)
-            .setTitle("Jogos que você jogou no Game Pass")
-            .setMessage("Marque SOMENTE os jogos acessados pelo Game Pass. O histórico Xbox inclui compras e outros jogos. Seleções anteriores são mantidas mesmo se não aparecerem nesta consulta.")
-            .setMultiChoiceItems(names,checked,(dialog,which,isChecked)->{
+        // setMessage() and setMultiChoiceItems() compete for AlertDialog content.
+        // Use a custom heading so the guidance remains visible above the actual list.
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout heading=new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
+        heading.setPadding(pad,pad,pad,pad/2);
+        TextView headingTitle=new TextView(this);
+        headingTitle.setText("Game Pass: selecione jogos ("+games.size()+")");
+        headingTitle.setTextSize(20);
+        headingTitle.setTextColor(getColor(R.color.ludex_text));
+        heading.addView(headingTitle);
+        TextView hint=new TextView(this);
+        hint.setText("Marque apenas os jogos acessados pelo Game Pass. O histórico Xbox também inclui compras e jogos gratuitos.");
+        hint.setTextSize(13);
+        hint.setTextColor(getColor(R.color.ludex_muted));
+        hint.setPadding(0,pad/2,0,0);
+        heading.addView(hint);
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setCustomTitle(heading)
+            .setMultiChoiceItems(names,checked,(d,which,isChecked)->{
                 String id=games.get(which).titleId;
                 if(isChecked)selected.add(id);else selected.remove(id);
             })
             .setNegativeButton("Cancelar",null)
-            .setPositiveButton("Importar selecionados",(dialog,w)->{
+            .setPositiveButton("Importar selecionados",null)
+            .create();
+        dialog.setOnShowListener(ignored->
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                if(selected.isEmpty()){
+                    toast("Marque pelo menos um jogo antes de importar");
+                    return;
+                }
+                dialog.dismiss();
                 io.execute(()->{
-                    int imported=db.syncSelectedXboxGames(games,selected,true);
-                    db.setSetting("xbox.last_sync_ms",Long.toString(System.currentTimeMillis()));
-                    runOnUiThread(()->{
-                        updateXboxSyncInfo();
-                        reloadLibraryAsync();
-                        toast(imported+" jogos Xbox importados ou atualizados");
-                    });
+                    try{
+                        int imported=db.syncSelectedXboxGames(games,selected,true);
+                        db.setSetting("xbox.last_sync_ms",Long.toString(System.currentTimeMillis()));
+                        runOnUiThread(()->{
+                            updateXboxSyncInfo();
+                            reloadLibraryAsync();
+                            toast(imported+" jogos Xbox importados ou atualizados");
+                        });
+                    }catch(Exception error){
+                        runOnUiThread(()->toast("Falha ao importar seleção Xbox: "+error.getMessage()));
+                    }
                 });
-            })
-            .show();
+            }));
+        dialog.show();
     }
 
     private int syncXboxGamesNow() throws Exception{
