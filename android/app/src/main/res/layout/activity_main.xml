@@ -204,6 +204,19 @@
                     android:text="Sincronizar histórico PlayStation"/>
 
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp" android:text="Riot Games · LoL e VALORANT"
+                    android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Importe as horas históricas informadas pelo WOL.GG (League of Legends) ou Tracker.gg (VALORANT). Importação manual, sem acessar APIs privadas ou capturar senhas."
+                    android:textColor="@color/ludex_muted" android:textSize="13sp"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/riot_import"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Importar horas de LoL / VALORANT"/>
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="20dp" android:text="Conta Nintendo"
                     android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
                 <TextView android:id="@+id/nintendo_sync_info" android:layout_width="match_parent" android:layout_height="wrap_content"
