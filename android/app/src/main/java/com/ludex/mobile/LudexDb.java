@@ -314,6 +314,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT first_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT last_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT last_played_at FROM xbox_games xg WHERE xg.game_id=g.id LIMIT 1),0),"+
             "CASE WHEN lower(g.source)='renpy-save' OR (g.package_name IS NOT NULL AND EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)) THEN 1 ELSE 0 END "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
@@ -343,8 +344,8 @@ public final class LudexDb extends SQLiteOpenHelper {
                 g.acquiredAt=minPositive(epicAcquired,steamAcquired);
                 long steamLast=Math.max(0,c.getLong(37));
                 long psnLast=Math.max(0,c.getLong(39));
-                g.lastPlayedAt=Math.max(steamLast,psnLast);
-                g.renpy=c.getInt(40)!=0;
+                g.lastPlayedAt=Math.max(Math.max(steamLast,psnLast),Math.max(0,c.getLong(40)));
+                g.renpy=c.getInt(41)!=0;
                 out.add(g);
             }
         }
