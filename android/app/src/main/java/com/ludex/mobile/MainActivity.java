@@ -2190,9 +2190,13 @@ public final class MainActivity extends AppCompatActivity {
             .setPositiveButton("Salvar",(d,w)->{
                 String key=input.getText()==null?"":input.getText().toString().trim();
                 if(key.isBlank())return;
-                SecretStore.put(this,"xbox.openxbl_key",key);
-                updateXboxSyncInfo();
-                toast("Chave protegida. Agora escolha os jogos do Game Pass.");
+                try{
+                    SecretStore.put(this,"xbox.openxbl_key",key);
+                    updateXboxSyncInfo();
+                    toast("Chave protegida. Agora escolha os jogos do Game Pass.");
+                }catch(Exception error){
+                    toast("Não foi possível salvar a chave OpenXBL: "+error.getMessage());
+                }
             })
             .show();
     }
