@@ -905,3 +905,78 @@ mod tests {
         assert_eq!(count, 1000);
     }
 }
+
+#[cfg(test)]
+mod riot_playtime_tests {
+    use super::{import_sync_json, migrate, riot_playtime, save_riot_playtime};
+    use crate::db;
+    use chrono::Utc;
+    use serde_json::json;
+    use std::fs;
+    use uuid::Uuid;
+
+    #[test]
+    fn riot_import_replaces_total_without_double_counting() {
+        let path = std::env::temp_dir().join(format!("ludex-riot-{}.db", Uuid::new_v4()));
+        let mut connection = db::open(&path).unwrap();
+        migrate(&connection).unwrap();
+
+        save_riot_playtime(
+            &mut connection,
+            "lol",
+            3_600,
+            Some("https://wol.gg/summoner/euw/example"),
+        )
+        .unwrap();
+        save_riot_playtime(&mut connection, "lol", 7_200, None).unwrap();
+        let (seconds, _, _) = riot_playtime(&connection, "lol").unwrap();
+        assert_eq!(seconds, 7_200);
+
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM imported_playtime WHERE game_id='riot:lol'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(save_riot_playtime(
+            &mut connection,
+            "lol",
+            1_000,
+            Some("https://tracker.gg/valorant"),
+        )
+        .is_err());
+
+        let newest = Utc::now().timestamp_millis() + 120_000;
+        let bundle = json!({
+            "format": "ludex-mobile-sync",
+            "version": 1,
+            "games": [{
+                "id": "riot:lol", "title": "League of Legends",
+                "platform": "PC", "source": "riot", "updated_at_ms": newest
+            }],
+            "imported_playtime": [{
+                "game_id": "riot:lol", "provider": "riot-wolgg",
+                "seconds": 1800, "updated_at_ms": newest
+            }]
+        });
+        import_sync_json(&mut connection, &bundle.to_string()).unwrap();
+        assert_eq!(riot_playtime(&connection, "lol").unwrap().0, 1800);
+
+        let old = Utc::now().timestamp_millis() - 120_000;
+        let stale = json!({
+            "format": "ludex-mobile-sync",
+            "version": 1,
+            "imported_playtime": [{
+                "game_id": "riot:lol", "provider": "riot-wolgg",
+                "seconds": 9_000_000, "updated_at_ms": old
+            }]
+        });
+        import_sync_json(&mut connection, &stale.to_string()).unwrap();
+        assert_eq!(riot_playtime(&connection, "lol").unwrap().0, 1800);
+
+        drop(connection);
+        let _ = fs::remove_file(path);
+    }
+}
