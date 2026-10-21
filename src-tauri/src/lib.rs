@@ -93,12 +93,7 @@ fn save_riot_playtime(
     profile_url: Option<String>,
 ) -> Result<(), String> {
     let mut connection = open_product(&state.db_path)?;
-    product::save_riot_playtime(
-        &mut connection,
-        &game_key,
-        seconds,
-        profile_url.as_deref(),
-    )
+    product::save_riot_playtime(&mut connection, &game_key, seconds, profile_url.as_deref())
 }
 
 #[tauri::command]
