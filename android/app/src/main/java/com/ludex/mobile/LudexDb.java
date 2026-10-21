@@ -76,7 +76,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
     }
 
-    public LudexDb(Context c){super(c,"ludex-mobile.db",null,19);}
+    public LudexDb(Context c){super(c,"ludex-mobile.db",null,20);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE games(id TEXT PRIMARY KEY,title TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'Android',source TEXT NOT NULL DEFAULT 'android',package_name TEXT UNIQUE,installed INTEGER NOT NULL DEFAULT 0,favorite INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'Quero jogar',first_seen_at INTEGER NOT NULL DEFAULT 0,first_opened_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE play_sessions(id TEXT PRIMARY KEY,game_id TEXT NOT NULL,package_name TEXT,started_at INTEGER NOT NULL,ended_at INTEGER NOT NULL,duration_seconds INTEGER NOT NULL,device TEXT NOT NULL DEFAULT 'android',provider TEXT NOT NULL DEFAULT 'android')");
@@ -95,6 +95,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE manual_games(game_id TEXT PRIMARY KEY,platform_key TEXT NOT NULL,image_uri TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE hidden_games(game_id TEXT PRIMARY KEY,hidden_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE renpy_apps(package_name TEXT PRIMARY KEY,classified INTEGER NOT NULL,method TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE xbox_games(title_id TEXT PRIMARY KEY,game_id TEXT NOT NULL UNIQUE,image_url TEXT NOT NULL DEFAULT '',last_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldV,int newV){
         if(oldV<2)db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_game ON play_sessions(game_id,started_at)");
@@ -127,6 +128,7 @@ public final class LudexDb extends SQLiteOpenHelper {
         }
         if(oldV<18)db.execSQL("CREATE TABLE IF NOT EXISTS psn_games(game_id TEXT PRIMARY KEY,title_id TEXT NOT NULL UNIQUE,concept_id TEXT NOT NULL DEFAULT '',image_url TEXT NOT NULL DEFAULT '',category TEXT NOT NULL DEFAULT '',service TEXT NOT NULL DEFAULT '',first_played_at INTEGER NOT NULL DEFAULT 0,last_played_at INTEGER NOT NULL DEFAULT 0,play_count INTEGER NOT NULL DEFAULT 0,trophy_progress INTEGER NOT NULL DEFAULT 0,trophies_earned INTEGER NOT NULL DEFAULT 0,trophies_defined INTEGER NOT NULL DEFAULT 0,platinum_earned INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
         if(oldV<19)db.execSQL("CREATE TABLE IF NOT EXISTS renpy_apps(package_name TEXT PRIMARY KEY,classified INTEGER NOT NULL,method TEXT NOT NULL,updated_at INTEGER NOT NULL)");
+        if(oldV<20)db.execSQL("CREATE TABLE IF NOT EXISTS xbox_games(title_id TEXT PRIMARY KEY,game_id TEXT NOT NULL UNIQUE,image_url TEXT NOT NULL DEFAULT '',last_played_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)");
     }
 
     private static String manualSource(String platformKey){
@@ -312,6 +314,7 @@ public final class LudexDb extends SQLiteOpenHelper {
             "COALESCE((SELECT last_played_at FROM steam_games sg WHERE sg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT first_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
             "COALESCE((SELECT last_played_at FROM psn_games pg WHERE pg.game_id=g.id LIMIT 1),0),"+
+            "COALESCE((SELECT last_played_at FROM xbox_games xg WHERE xg.game_id=g.id LIMIT 1),0),"+
             "CASE WHEN lower(g.source)='renpy-save' OR (g.package_name IS NOT NULL AND EXISTS(SELECT 1 FROM renpy_apps ra WHERE ra.package_name=g.package_name AND ra.classified=1)) THEN 1 ELSE 0 END "+
             "FROM games g WHERE NOT EXISTS(SELECT 1 FROM hidden_games h WHERE h.game_id=g.id) ORDER BY g.title COLLATE NOCASE";
         try(Cursor c=getReadableDatabase().rawQuery(sql,null)){
@@ -341,8 +344,8 @@ public final class LudexDb extends SQLiteOpenHelper {
                 g.acquiredAt=minPositive(epicAcquired,steamAcquired);
                 long steamLast=Math.max(0,c.getLong(37));
                 long psnLast=Math.max(0,c.getLong(39));
-                g.lastPlayedAt=Math.max(steamLast,psnLast);
-                g.renpy=c.getInt(40)!=0;
+                g.lastPlayedAt=Math.max(Math.max(steamLast,psnLast),Math.max(0,c.getLong(40)));
+                g.renpy=c.getInt(41)!=0;
                 out.add(g);
             }
         }
@@ -439,6 +442,86 @@ public final class LudexDb extends SQLiteOpenHelper {
             if(c.moveToFirst())return new SteamInfo(c.getString(0),c.getInt(1)!=0,c.getLong(2),c.getLong(3));
         }
         return null;
+    }
+
+    /** The user chooses which Xbox history titles were accessed via Game Pass. */
+    public Set<String> selectedXboxTitleIds(){
+        LinkedHashSet<String> ids=new LinkedHashSet<>();
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT title_id FROM xbox_games",null)){
+            while(c.moveToNext())ids.add(c.getString(0));
+        }
+        return ids;
+    }
+
+    public int syncSelectedXboxGames(List<XboxHistoryClient.Game> titles,Set<String> selected,boolean replaceSelection){
+        SQLiteDatabase sqlite=getWritableDatabase();
+        sqlite.beginTransaction();
+        long now=System.currentTimeMillis();
+        int updated=0;
+        try{
+            if(replaceSelection){
+                ArrayList<String> removal=new ArrayList<>();
+                try(Cursor c=sqlite.rawQuery("SELECT title_id FROM xbox_games",null)){
+                    while(c.moveToNext()){
+                        String id=c.getString(0);
+                        if(!selected.contains(id))removal.add(id);
+                    }
+                }
+                for(String titleId:removal){
+                    String gameId="xbox:"+titleId;
+                    sqlite.delete("xbox_games","title_id=?",new String[]{titleId});
+                    sqlite.delete("imported_playtime","game_id=? AND provider='xbox'",new String[]{gameId});
+                    sqlite.delete("games","id=? AND source='xbox'",new String[]{gameId});
+                }
+            }
+
+            for(XboxHistoryClient.Game title:titles){
+                if(!selected.contains(title.titleId)||title.name.isBlank())continue;
+                String gameId="xbox:"+title.titleId;
+                ContentValues game=new ContentValues();
+                game.put("id",gameId);
+                game.put("title",title.name);
+                game.put("platform","Xbox / Game Pass");
+                game.put("source","xbox");
+                game.put("installed",0);
+                game.put("first_seen_at",now);
+                game.put("updated_at",now);
+                sqlite.insertWithOnConflict("games",null,game,SQLiteDatabase.CONFLICT_IGNORE);
+                ContentValues newer=new ContentValues();
+                newer.put("title",title.name);
+                newer.put("updated_at",now);
+                sqlite.update("games",newer,"id=?",new String[]{gameId});
+
+                ContentValues link=new ContentValues();
+                link.put("title_id",title.titleId);
+                link.put("game_id",gameId);
+                link.put("image_url",title.imageUrl);
+                link.put("last_played_at",title.lastPlayedAt);
+                link.put("updated_at",now);
+                sqlite.insertWithOnConflict("xbox_games",null,link,SQLiteDatabase.CONFLICT_REPLACE);
+
+                // A missing MinutesPlayed value must not erase previously imported hours.
+                if(title.seconds>=0){
+                    ContentValues play=new ContentValues();
+                    play.put("game_id",gameId);
+                    play.put("provider","xbox");
+                    play.put("seconds",title.seconds);
+                    play.put("updated_at",now);
+                    sqlite.insertWithOnConflict("imported_playtime",null,play,SQLiteDatabase.CONFLICT_REPLACE);
+                }
+                sqlite.delete("hidden_games","game_id=?",new String[]{gameId});
+                updated++;
+            }
+            sqlite.setTransactionSuccessful();
+        }finally{sqlite.endTransaction();}
+        return updated;
+    }
+
+    public String xboxImageForGame(String gameId){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT image_url FROM xbox_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
+            if(c.moveToFirst())return c.getString(0);
+        }
+        return "";
     }
 
     public int syncPsnPlayHistory(List<PsnClient.Title> titles){

@@ -68,7 +68,7 @@ public final class MainActivity extends AppCompatActivity {
     private GameAdapter gameAdapter;
     private EmulatorAdapter emulatorAdapter;
     private View syncPanel, emptyState;
-    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, psnSyncInfo, nintendoSyncInfo, artworkInfo;
+    private TextView summary, syncInfo, steamSyncInfo, epicSyncInfo, psnSyncInfo, xboxSyncInfo, nintendoSyncInfo, artworkInfo;
     private Tab tab=Tab.LIBRARY;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(4);
@@ -322,6 +322,7 @@ public final class MainActivity extends AppCompatActivity {
         steamSyncInfo=findViewById(R.id.steam_sync_info);
         epicSyncInfo=findViewById(R.id.epic_sync_info);
         psnSyncInfo=findViewById(R.id.psn_sync_info);
+        xboxSyncInfo=findViewById(R.id.xbox_sync_info);
         nintendoSyncInfo=findViewById(R.id.nintendo_sync_info);
         artworkInfo=findViewById(R.id.artwork_info);
         emptyState=findViewById(R.id.empty_state);
@@ -358,6 +359,9 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.sync_usage).setOnClickListener(v->importUsageAsync(true));
         findViewById(R.id.steam_config).setOnClickListener(v->showSteamConfig());
         findViewById(R.id.steam_sync).setOnClickListener(v->syncSteamPlaytime(true));
+        findViewById(R.id.xbox_config).setOnClickListener(v->showXboxConfig());
+        findViewById(R.id.xbox_select).setOnClickListener(v->chooseXboxGames());
+        findViewById(R.id.xbox_sync).setOnClickListener(v->syncXboxGames(true));
         findViewById(R.id.epic_connect).setOnClickListener(v->showEpicConnect());
         findViewById(R.id.epic_sync).setOnClickListener(v->syncEpicLibrary(true));
         findViewById(R.id.epic_pending).setOnClickListener(v->showEpicPending());
@@ -636,6 +640,15 @@ public final class MainActivity extends AppCompatActivity {
                     }));
                 }
 
+                if(!SecretStore.get(this,"xbox.openxbl_key").isEmpty()&&!db.selectedXboxTitleIds().isEmpty()){
+                    remoteTasks.add(remoteSyncIo.submit(()->{
+                        try{
+                            syncXboxGamesNow();
+                            updated.add("Xbox");
+                        }catch(Exception e){failed.add("Xbox");}
+                    }));
+                }
+
                 // Eden é local/Shizuku: execute enquanto as APIs remotas trabalham em paralelo.
                 if(Shizuku.pingBinder()){
                     int edenMatched=0;
@@ -658,6 +671,7 @@ public final class MainActivity extends AppCompatActivity {
                     updateSteamSyncInfo();
                     updateEpicSyncInfo();
                     updatePsnSyncInfo();
+                    updateXboxSyncInfo();
                     updateNintendoSyncInfo();
                     renderCurrent();
                     refresh.setEnabled(true);
@@ -734,6 +748,7 @@ public final class MainActivity extends AppCompatActivity {
             updateSteamSyncInfo();
             updateEpicSyncInfo();
             updatePsnSyncInfo();
+            updateXboxSyncInfo();
             updateNintendoSyncInfo();
             updateArtworkInfo();
             return;
@@ -1021,14 +1036,25 @@ public final class MainActivity extends AppCompatActivity {
         if(game.renpy)return filter==LibraryFilter.RENPY;
         if(filter==LibraryFilter.RENPY)return false;
         if(filter==LibraryFilter.ALL)return game.seconds>0;
+        if(filter==LibraryFilter.XBOX){
+            for(LudexDb.GameRow row:game.variants)if("xbox".equals(row.source))return true;
+        }
         for(LudexDb.GameRow row:game.variants){
             if(rowHasPlaytimeForFilter(row,filter))return true;
         }
         return false;
     }
 
+    private static boolean hasXboxHistoryVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants)if("xbox".equals(row.source))return true;
+        return false;
+    }
+
     private boolean groupMatchesTab(DisplayGame game,Tab mode){
         if(game.renpy)return mode==Tab.LIBRARY&&libraryFilter==LibraryFilter.RENPY;
+        if(mode==Tab.LIBRARY&&libraryFilter==LibraryFilter.XBOX){
+            for(LudexDb.GameRow row:game.variants)if("xbox".equals(row.source))return true;
+        }
         if(mode!=Tab.LIBRARY&&mode!=Tab.ANDROID&&mode!=Tab.EMULATED)return true;
         for(LudexDb.GameRow row:game.variants){
             if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
@@ -1129,6 +1155,7 @@ public final class MainActivity extends AppCompatActivity {
             if(manual!=null&&!manual.imageUri.isBlank())score+=450;
             if(row.steam)score+=400;
             if(row.epic)score+=350;
+            if("xbox".equals(row.source))score+=330;
             if(row.playstation)score+=325;
             if(row.nintendo)score+=300;
             if(row.gameNative)score+=200;
@@ -2121,6 +2148,148 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void updateXboxSyncInfo(){
+        boolean connected=!SecretStore.get(this,"xbox.openxbl_key").isBlank();
+        int chosen=db.selectedXboxTitleIds().size();
+        long last=db.getSettingLong("xbox.last_sync_ms",0);
+        String date=last>0?" · última sync "+new java.text.SimpleDateFormat("dd/MM HH:mm",Locale.getDefault()).format(new java.util.Date(last)):"";
+        xboxSyncInfo.setText(connected
+            ?"OpenXBL configurado · "+chosen+" jogos selecionados"+date
+            :"Configure uma chave pessoal OpenXBL e escolha apenas os jogos que você realmente jogou pelo Game Pass.");
+    }
+
+    private void showXboxConfig(){
+        LinearLayout wrapper=new LinearLayout(this);
+        wrapper.setOrientation(LinearLayout.VERTICAL);
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        wrapper.setPadding(pad,8,pad,0);
+        TextView link=new TextView(this);
+        link.setText("Criar/conectar conta e obter chave em xbl.io ↗");
+        link.setTextColor(getColor(R.color.ludex_accent));
+        link.setPadding(0,0,0,pad);
+        link.setOnClickListener(v->{
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://xbl.io/")));}
+            catch(Exception e){toast("Não foi possível abrir xbl.io");}
+        });
+        wrapper.addView(link);
+        EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("Cole a chave X-Authorization do OpenXBL");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        wrapper.addView(input);
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Xbox / Game Pass via OpenXBL")
+            .setMessage("O histórico Xbox inclui compras e jogos de assinatura; você escolherá quais realmente jogou pelo Game Pass. OpenXBL é um serviço de terceiros, não da Microsoft. Faça login no site deles e cole somente a chave de API, nunca sua senha Microsoft.")
+            .setView(wrapper)
+            .setNegativeButton("Cancelar",null)
+            .setNeutralButton("Desconectar",(d,w)->{
+                SecretStore.remove(this,"xbox.openxbl_key");
+                updateXboxSyncInfo();
+                toast("Chave OpenXBL retirada. Os jogos já importados foram mantidos.");
+            })
+            .setPositiveButton("Salvar",(d,w)->{
+                String key=input.getText()==null?"":input.getText().toString().trim();
+                if(key.isBlank())return;
+                try{
+                    SecretStore.put(this,"xbox.openxbl_key",key);
+                    updateXboxSyncInfo();
+                    toast("Chave protegida. Agora escolha os jogos do Game Pass.");
+                }catch(Exception error){
+                    toast("Não foi possível salvar a chave OpenXBL: "+error.getMessage());
+                }
+            })
+            .show();
+    }
+
+    private void chooseXboxGames(){
+        String key=SecretStore.get(this,"xbox.openxbl_key");
+        if(key.isBlank()){showXboxConfig();return;}
+        toast("Lendo histórico Xbox e horas jogadas…");
+        io.execute(()->{
+            try{
+                XboxHistoryClient.Snapshot data=XboxHistoryClient.fetch(key);
+                runOnUiThread(()->showXboxSelection(data));
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha ao consultar Xbox: "+e.getMessage()));
+            }
+        });
+    }
+
+    private void showXboxSelection(XboxHistoryClient.Snapshot history){
+        List<XboxHistoryClient.Game> games=history.games;
+        if(games.isEmpty()){
+            new MaterialAlertDialogBuilder(this).setTitle("Histórico Xbox vazio")
+                .setMessage("Nenhum título jogado foi retornado pelo serviço.")
+                .setPositiveButton("OK",null).show();
+            return;
+        }
+        Set<String> previous=db.selectedXboxTitleIds();
+        LinkedHashSet<String> selected=new LinkedHashSet<>(previous);
+        String[] names=new String[games.size()];
+        boolean[] checked=new boolean[games.size()];
+        for(int i=0;i<games.size();i++){
+            XboxHistoryClient.Game game=games.get(i);
+            checked[i]=selected.contains(game.titleId);
+            String hours=game.seconds<0?"horas não disponíveis":format(game.seconds);
+            names[i]=game.name+" · "+hours;
+        }
+        new MaterialAlertDialogBuilder(this)
+            .setTitle("Jogos que você jogou no Game Pass")
+            .setMessage("Marque SOMENTE os jogos acessados pelo Game Pass. O histórico Xbox inclui compras e outros jogos. Seleções anteriores são mantidas mesmo se não aparecerem nesta consulta.")
+            .setMultiChoiceItems(names,checked,(dialog,which,isChecked)->{
+                String id=games.get(which).titleId;
+                if(isChecked)selected.add(id);else selected.remove(id);
+            })
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Importar selecionados",(dialog,w)->{
+                io.execute(()->{
+                    int imported=db.syncSelectedXboxGames(games,selected,true);
+                    db.setSetting("xbox.last_sync_ms",Long.toString(System.currentTimeMillis()));
+                    runOnUiThread(()->{
+                        updateXboxSyncInfo();
+                        reloadLibraryAsync();
+                        toast(imported+" jogos Xbox importados ou atualizados");
+                    });
+                });
+            })
+            .show();
+    }
+
+    private int syncXboxGamesNow() throws Exception{
+        String key=SecretStore.get(this,"xbox.openxbl_key");
+        if(key.isBlank())throw new IllegalArgumentException("Chave OpenXBL não configurada");
+        Set<String> selected=db.selectedXboxTitleIds();
+        if(selected.isEmpty())return 0;
+        XboxHistoryClient.Snapshot history=XboxHistoryClient.fetch(key);
+        int imported=db.syncSelectedXboxGames(history.games,selected,false);
+        db.setSetting("xbox.last_sync_ms",Long.toString(System.currentTimeMillis()));
+        return imported;
+    }
+
+    private void syncXboxGames(boolean notify){
+        if(SecretStore.get(this,"xbox.openxbl_key").isBlank()){
+            if(notify)showXboxConfig();
+            return;
+        }
+        if(db.selectedXboxTitleIds().isEmpty()){
+            if(notify)chooseXboxGames();
+            return;
+        }
+        if(notify)toast("Sincronizando jogos Xbox selecionados…");
+        io.execute(()->{
+            try{
+                int count=syncXboxGamesNow();
+                runOnUiThread(()->{
+                    updateXboxSyncInfo();
+                    if(notify)toast(count+" jogos Xbox atualizados");
+                    reloadLibraryAsync();
+                });
+            }catch(Exception e){
+                runOnUiThread(()->toast("Falha na sincronização Xbox: "+e.getMessage()));
+            }
+        });
+    }
+
     private void updatePsnSyncInfo(){
         boolean connected=!SecretStore.get(this,"psn.refresh_token").isEmpty();
         long last=db.getSettingLong("psn.last_sync_ms",0);
@@ -2580,6 +2749,13 @@ public final class MainActivity extends AppCompatActivity {
             loadArtworkAsync("psn:"+psnInfo.titleId,view,expectedTag,()->PsnArtworkLoader.load(this,psnInfo.titleId,psnInfo.imageUrl));
             return;
         }
+        if("xbox".equals(g.source)){
+            String image=db.xboxImageForGame(g.id);
+            if(!image.isBlank()){
+                loadArtworkAsync("xbox:"+g.id,view,expectedTag,()->XboxArtworkLoader.load(this,g.id,image));
+            }
+            return;
+        }
         if("nintendo".equals(g.source)){
             LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
             if(n!=null&&!n.imageUrl.isBlank()){
@@ -2664,7 +2840,7 @@ public final class MainActivity extends AppCompatActivity {
         void filter(String query,Tab mode){
             shown.clear();String q=query==null?"":query.trim().toLowerCase(Locale.ROOT);
             for(DisplayGame g:all){
-                if(g.seconds<=0&&!g.renpy)continue;
+                if(g.seconds<=0&&!g.renpy&&!(libraryFilter==LibraryFilter.XBOX&&hasXboxHistoryVariant(g)))continue;
                 if(!groupMatchesTab(g,mode))continue;
                 if(!groupMatchesLibrary(g,libraryFilter))continue;
                 if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q)&&!librariesLabel(g).toLowerCase(Locale.ROOT).contains(q))continue;
