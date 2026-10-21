@@ -74,6 +74,9 @@ public final class MainActivity extends AppCompatActivity {
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private final ExecutorService remoteSyncIo=Executors.newFixedThreadPool(4);
     private final ExecutorService artworkIo=Executors.newFixedThreadPool(4);
+    private final Set<String> artworkInFlight=ConcurrentHashMap.newKeySet();
+    private final android.util.LruCache<String,Long> artworkMisses=new android.util.LruCache<>(800);
+    private static final long ARTWORK_RETRY_MS=60L*60L*1000L;
     private final android.util.LruCache<String,android.graphics.Bitmap> artworkMemory=
         new android.util.LruCache<String,android.graphics.Bitmap>(24*1024){
             @Override protected int sizeOf(String key,android.graphics.Bitmap value){
@@ -2761,8 +2764,8 @@ public final class MainActivity extends AppCompatActivity {
     private void updateArtworkInfo(){
         boolean has=!SecretStore.get(this,"steamgriddb.api_key").isEmpty();
         artworkInfo.setText(has
-            ?"Libretro + SteamGridDB configurados. Capas modernas e retrô serão buscadas e armazenadas em cache."
-            :"Libretro será usado automaticamente. Configure SteamGridDB para capas de Switch e outros sistemas modernos.");
+            ?"Capas: URLs das plataformas, Libretro, Steam e SteamGridDB ativado (inclui Riot, Genshin e jogos sem imagem)."
+            :"Capas: URLs das plataformas, Libretro, artes oficiais Riot e busca Steam. Adicione a API Key do SteamGridDB para jogos fora da Steam.");
     }
 
     private void showArtworkConfig(){
@@ -2777,13 +2780,13 @@ public final class MainActivity extends AppCompatActivity {
         link.setOnClickListener(v->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.steamgriddb.com/profile/preferences/api")));}catch(Exception e){toast("Não foi possível abrir o SteamGridDB");}});
         wrap.addView(link,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
         new MaterialAlertDialogBuilder(this)
-            .setTitle("Capas de jogos emulados")
-            .setMessage("Sistemas retrô usam Libretro sem chave. SteamGridDB serve como fallback, inclusive para Nintendo Switch.")
+            .setTitle("Capas de todos os jogos")
+            .setMessage("Busca automática de imagens para jogos públicos: Steam e artes Riot sem chave; SteamGridDB (API Key grátis) complementa Riot, Genshin, Nintendo e outras plataformas. Jogos privados Ren’Py não são consultados.")
             .setView(wrap).setNegativeButton("Cancelar",null)
-            .setNeutralButton("Remover chave",(d,w)->{SecretStore.remove(this,"steamgriddb.api_key");updateArtworkInfo();})
+            .setNeutralButton("Remover chave",(d,w)->{SecretStore.remove(this,"steamgriddb.api_key");artworkMemory.evictAll();artworkMisses.evictAll();updateArtworkInfo();gameAdapter.notifyDataSetChanged();})
             .setPositiveButton("Salvar",(d,w)->{
                 String value=key.getText()==null?"":key.getText().toString().trim();
-                try{if(!value.isEmpty())SecretStore.put(this,"steamgriddb.api_key",value);updateArtworkInfo();gameAdapter.notifyDataSetChanged();}
+                try{if(!value.isEmpty())SecretStore.put(this,"steamgriddb.api_key",value);artworkMemory.evictAll();artworkMisses.evictAll();updateArtworkInfo();gameAdapter.notifyDataSetChanged();}
                 catch(Exception e){toast("Não foi possível proteger a chave: "+e.getMessage());}
             }).show();
     }
@@ -2869,7 +2872,10 @@ public final class MainActivity extends AppCompatActivity {
             LudexDb.EmulatorLaunch e=db.getEmulatorLaunch(g.id);if(e!=null)iconPkg=e.packageName;
         }
         Drawable fallback=iconPkg==null?null:appIcon(iconPkg);
-        view.setImageDrawable(fallback);view.setVisibility(fallback==null?View.INVISIBLE:View.VISIBLE);
+        view.setImageDrawable(fallback);
+        view.setVisibility(fallback==null?View.GONE:View.VISIBLE);
+        View placeholder=((View)view.getParent()).findViewById(R.id.game_icon_placeholder);
+        if(placeholder!=null)placeholder.setVisibility(fallback==null?View.VISIBLE:View.GONE);
 
         final String expectedTag=g.id;
         LudexDb.ManualInfo manualInfo=db.getManualInfo(g.id);
@@ -2877,34 +2883,44 @@ public final class MainActivity extends AppCompatActivity {
             loadArtworkAsync("manual:"+manualInfo.imageUri,view,expectedTag,()->loadManualArtwork(manualInfo.imageUri));
             return;
         }
+
+        // Never look up private, local APK or manually entered games by title.
+        String source=g.source==null?"":g.source.toLowerCase(Locale.ROOT);
+        boolean publicCatalog=g.steam||g.epic||g.playstation||g.nintendo||
+            "xbox".equals(source)||"riot".equals(source)||"gog".equals(source);
+        String key=publicCatalog?SecretStore.get(this,"steamgriddb.api_key"):"";
+
         LudexDb.SteamInfo steamInfo=db.getSteamInfo(g.id);
         if(steamInfo!=null&&!g.gameNative){
-            loadArtworkAsync("steam:"+steamInfo.appId,view,expectedTag,()->GameArtworkLoader.load(this,"steam",steamInfo.appId));
+            loadArtworkAsync("steam:"+steamInfo.appId+":"+g.title,view,expectedTag,
+                ()->withCatalogFallback(g.title,key,()->GameArtworkLoader.load(this,"steam",steamInfo.appId)));
             return;
         }
         LudexDb.EpicInfo epicInfo=db.getEpicInfo(g.id);
         if(epicInfo!=null&&!epicInfo.imageUrl.isBlank()){
-            loadArtworkAsync("epic:"+epicInfo.appName,view,expectedTag,()->EpicArtworkLoader.load(this,epicInfo.appName,epicInfo.imageUrl));
+            loadArtworkAsync("epic:"+epicInfo.appName+":"+g.title,view,expectedTag,
+                ()->withCatalogFallback(g.title,key,()->EpicArtworkLoader.load(this,epicInfo.appName,epicInfo.imageUrl)));
             return;
         }
         LudexDb.PsnInfo psnInfo=db.getPsnInfo(g.id);
         if(psnInfo!=null&&!psnInfo.imageUrl.isBlank()){
-            loadArtworkAsync("psn:"+psnInfo.titleId,view,expectedTag,()->PsnArtworkLoader.load(this,psnInfo.titleId,psnInfo.imageUrl));
+            loadArtworkAsync("psn:"+psnInfo.titleId+":"+g.title,view,expectedTag,
+                ()->withCatalogFallback(g.title,key,()->PsnArtworkLoader.load(this,psnInfo.titleId,psnInfo.imageUrl)));
             return;
         }
-        if("xbox".equals(g.source)){
+        if("xbox".equals(source)){
             String image=db.xboxImageForGame(g.id);
-            if(!image.isBlank()){
-                loadArtworkAsync("xbox:"+g.id,view,expectedTag,()->XboxArtworkLoader.load(this,g.id,image));
-            }
+            loadArtworkAsync("xbox:"+g.id+":"+g.title,view,expectedTag,
+                ()->withCatalogFallback(g.title,key,()->XboxArtworkLoader.load(this,g.id,image)));
             return;
         }
-        if("nintendo".equals(g.source)){
+        if("nintendo".equals(source)){
             LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
             if(n!=null&&!n.imageUrl.isBlank()){
-                loadArtworkAsync("nintendo:"+n.titleId,view,expectedTag,()->NintendoArtworkLoader.load(this,n.titleId,n.imageUrl));
+                loadArtworkAsync("nintendo:"+n.titleId+":"+g.title,view,expectedTag,
+                    ()->withCatalogFallback(g.title,key,()->NintendoArtworkLoader.load(this,n.titleId,n.imageUrl)));
+                return;
             }
-            return;
         }
         if(g.gameNative){
             LudexDb.GameNativeLaunch launch=db.getGameNativeLaunch(g.id);
@@ -2919,10 +2935,19 @@ public final class MainActivity extends AppCompatActivity {
             else {LudexDb.EmulatorLaunch e=db.getEmulatorLaunch(g.id);if(e!=null)pkg=e.packageName;}
             EmulatorRegistry.Emulator em=EmulatorRegistry.get(pkg);
             String libretro=em==null?null:em.libretroSystem;
-            String key=SecretStore.get(this,"steamgriddb.api_key");
+            String emulatedKey=SecretStore.get(this,"steamgriddb.api_key");
             String cacheKey="emulated:"+g.platform+":"+String.valueOf(libretro)+":"+g.title;
-            loadArtworkAsync(cacheKey,view,expectedTag,()->EmulatedArtworkLoader.load(this,g.platform,libretro,g.title,key));
+            loadArtworkAsync(cacheKey,view,expectedTag,()->EmulatedArtworkLoader.load(this,g.platform,libretro,g.title,emulatedKey));
+            return;
         }
+        if(publicCatalog){
+            loadArtworkAsync("catalog:"+g.title,view,expectedTag,()->CatalogArtworkLoader.load(this,g.title,key));
+        }
+    }
+
+    private android.graphics.Bitmap withCatalogFallback(String title,String key,Callable<android.graphics.Bitmap> preferred)throws Exception{
+        android.graphics.Bitmap bitmap=preferred.call();
+        return bitmap!=null?bitmap:CatalogArtworkLoader.load(this,title,key);
     }
 
     private void loadArtworkAsync(String cacheKey,ImageView view,String expectedTag,Callable<android.graphics.Bitmap> loader){
@@ -2931,13 +2956,22 @@ public final class MainActivity extends AppCompatActivity {
             applyArtwork(view,expectedTag,cached);
             return;
         }
+        Long failedAt=artworkMisses.get(cacheKey);
+        if(failedAt!=null&&System.currentTimeMillis()-failedAt<ARTWORK_RETRY_MS)return;
+        if(!artworkInFlight.add(cacheKey))return;
         artworkIo.execute(()->{
             try{
                 android.graphics.Bitmap bmp=loader.call();
-                if(bmp==null)return;
+                if(bmp==null){
+                    artworkMisses.put(cacheKey,System.currentTimeMillis());
+                    return;
+                }
+                artworkMisses.remove(cacheKey);
                 artworkMemory.put(cacheKey,bmp);
                 runOnUiThread(()->applyArtwork(view,expectedTag,bmp));
-            }catch(Exception ignored){}
+            }catch(Exception ignored){
+                artworkMisses.put(cacheKey,System.currentTimeMillis());
+            }finally{artworkInFlight.remove(cacheKey);}
         });
     }
 
@@ -2951,7 +2985,12 @@ public final class MainActivity extends AppCompatActivity {
 
     private void applyArtwork(ImageView view,String expectedTag,android.graphics.Bitmap bmp){
         Object tag=view.getTag();
-        if(tag!=null&&expectedTag.equals(tag.toString())){view.setImageBitmap(bmp);view.setVisibility(View.VISIBLE);}
+        if(tag!=null&&expectedTag.equals(tag.toString())){
+            view.setImageBitmap(bmp);
+            view.setVisibility(View.VISIBLE);
+            View placeholder=((View)view.getParent()).findViewById(R.id.game_icon_placeholder);
+            if(placeholder!=null)placeholder.setVisibility(View.GONE);
+        }
     }
 
     Drawable appIcon(String pkg){
@@ -3009,16 +3048,19 @@ public final class MainActivity extends AppCompatActivity {
             h.date.setVisibility(date.isBlank()?View.GONE:View.VISIBLE);
             h.time.setText(format(displayPlaytime(g)));
             h.status.setText(g.favorite?"★ "+g.status:g.status);
+            String initials=g.title.isBlank()?"?":g.title.trim().substring(0,Math.min(2,g.title.trim().length())).toUpperCase(Locale.ROOT);
+            h.placeholder.setText(initials);
+            h.placeholder.setVisibility(View.VISIBLE);
             if(artwork!=null)bindGameArtwork(artwork,h.icon);
-            else h.icon.setVisibility(View.INVISIBLE);
+            else {h.icon.setTag(null);h.icon.setImageDrawable(null);h.icon.setVisibility(View.GONE);}
             h.play.setVisibility(launchable!=null?View.VISIBLE:View.GONE);
             h.itemView.setOnClickListener(v->click.click(g));
             h.play.setOnClickListener(v->launch.click(g));
         }
         public int getItemCount(){return shown.size();}
         final class Holder extends RecyclerView.ViewHolder{
-            TextView title,meta,date,time,status;ImageView icon;Button play;
-            Holder(View v){super(v);title=v.findViewById(R.id.game_title);meta=v.findViewById(R.id.game_meta);date=v.findViewById(R.id.game_date);time=v.findViewById(R.id.game_time);status=v.findViewById(R.id.game_status);icon=v.findViewById(R.id.game_icon);play=v.findViewById(R.id.game_play);}
+            TextView title,meta,date,time,status,placeholder;ImageView icon;Button play;
+            Holder(View v){super(v);title=v.findViewById(R.id.game_title);meta=v.findViewById(R.id.game_meta);date=v.findViewById(R.id.game_date);time=v.findViewById(R.id.game_time);status=v.findViewById(R.id.game_status);placeholder=v.findViewById(R.id.game_icon_placeholder);icon=v.findViewById(R.id.game_icon);play=v.findViewById(R.id.game_play);}
         }
     }
 
