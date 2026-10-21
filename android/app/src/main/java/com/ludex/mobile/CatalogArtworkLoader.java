@@ -37,9 +37,12 @@ final class CatalogArtworkLoader {
         if(!dir.isDirectory()&&!dir.mkdirs())return null;
         String normalized=normalize(title);
         if(normalized.isEmpty())return null;
-        File target=new File(dir,hash(normalized)+".img");
-        Bitmap cached=ArtworkBitmap.decode(target);
-        if(cached!=null)return cached;
+        File target=new File(dir,hash(normalized)+"-sgdb.img");
+        File publicTarget=new File(dir,hash(normalized)+"-public.img");
+        if(steamGridKey!=null&&!steamGridKey.isBlank()){
+            Bitmap cached=ArtworkBitmap.decode(target);
+            if(cached!=null)return cached;
+        }
 
         // SteamGridDB covers modern games unavailable in the Steam catalog (e.g. Riot, Genshin).
         if(steamGridKey!=null&&!steamGridKey.isBlank()){
@@ -73,11 +76,13 @@ final class CatalogArtworkLoader {
             }catch(Exception ignored){/* fall through to other providers */}
         }
 
+        Bitmap publicCached=ArtworkBitmap.decode(publicTarget);
+        if(publicCached!=null)return publicCached;
         if("league of legends".equals(normalized)){
-            Bitmap image=download(LOL_ARTWORK,target);
+            Bitmap image=download(LOL_ARTWORK,publicTarget);
             if(image!=null)return image;
         }else if("valorant".equals(normalized)){
-            Bitmap image=download(VALORANT_ARTWORK,target);
+            Bitmap image=download(VALORANT_ARTWORK,publicTarget);
             if(image!=null)return image;
         }
 
@@ -174,7 +179,8 @@ final class CatalogArtworkLoader {
     }
 
     private static String encode(String s){
-        return URLEncoder.encode(s,StandardCharsets.UTF_8).replace("+","%20");
+        try{return URLEncoder.encode(s,StandardCharsets.UTF_8.name()).replace("+","%20");}
+        catch(Exception ignored){return s;}
     }
 
     private static String hash(String s){
