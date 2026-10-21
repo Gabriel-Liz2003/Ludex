@@ -78,6 +78,30 @@ fn add_manual_game(
 }
 
 #[tauri::command]
+fn riot_playtime(
+    state: tauri::State<'_, AppState>,
+    game_key: String,
+) -> Result<(i64, Option<String>, Option<String>), String> {
+    product::riot_playtime(&open_product(&state.db_path)?, &game_key)
+}
+
+#[tauri::command]
+fn save_riot_playtime(
+    state: tauri::State<'_, AppState>,
+    game_key: String,
+    seconds: i64,
+    profile_url: Option<String>,
+) -> Result<(), String> {
+    let mut connection = open_product(&state.db_path)?;
+    product::save_riot_playtime(
+        &mut connection,
+        &game_key,
+        seconds,
+        profile_url.as_deref(),
+    )
+}
+
+#[tauri::command]
 async fn provider_statuses(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ProviderStatus>, String> {
@@ -630,6 +654,8 @@ pub fn run() {
             list_games,
             get_game_details,
             add_manual_game,
+            riot_playtime,
+            save_riot_playtime,
             provider_statuses,
             sync_provider,
             steam_status,
