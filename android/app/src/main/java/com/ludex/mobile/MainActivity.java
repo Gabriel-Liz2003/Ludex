@@ -41,6 +41,7 @@ public final class MainActivity extends AppCompatActivity {
         EPIC("epic","Epic"),
         GOG("gog","GOG"),
         XBOX("xbox","Xbox"),
+        RIOT("riot","Riot Games"),
         EMULATED("emulated","Emulados"),
         OTHER("other","Outros");
 
@@ -367,6 +368,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.epic_pending).setOnClickListener(v->showEpicPending());
         findViewById(R.id.psn_connect).setOnClickListener(v->showPsnConnect());
         findViewById(R.id.psn_sync).setOnClickListener(v->syncPsnPlayHistory(true));
+        findViewById(R.id.riot_import).setOnClickListener(v->showRiotImport());
         findViewById(R.id.nintendo_connect).setOnClickListener(v->showNintendoConnect());
         findViewById(R.id.nintendo_sync).setOnClickListener(v->syncNintendoPlaytime(true));
         findViewById(R.id.artwork_config).setOnClickListener(v->showArtworkConfig());
@@ -384,6 +386,115 @@ public final class MainActivity extends AppCompatActivity {
             renderCurrent();
             return true;
         });
+    }
+
+    private static final String[] RIOT_GAME_LABELS={"League of Legends · WOL.GG","VALORANT · Tracker.gg"};
+    private static final String[] RIOT_GAME_KEYS={"lol","valorant"};
+
+    private static boolean validRiotProfileUrl(String key,String raw){
+        if(raw==null||raw.isBlank())return true;
+        Uri uri=Uri.parse(raw.trim());
+        if(!"https".equalsIgnoreCase(uri.getScheme())||uri.getUserInfo()!=null)return false;
+        String host=uri.getHost();
+        if(host==null)return false;
+        host=host.toLowerCase(Locale.ROOT);
+        String allowed="lol".equals(key)?"wol.gg":"tracker.gg";
+        return host.equals(allowed)||host.endsWith("."+allowed);
+    }
+
+    private void showRiotImport(){
+        int pad=(int)(16*getResources().getDisplayMetrics().density);
+        LinearLayout wrap=new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(pad,pad/2,pad,pad/2);
+
+        TextView info=new TextView(this);
+        info.setText("Informe o total histórico exibido pelo site, não somente as horas novas. " +
+            "O Ludex substitui o valor anterior, sem duplicar importações. " +
+            "Essas horas são estimativas de terceiros, não dados oficiais da Riot.");
+        info.setTextColor(getColor(R.color.ludex_muted));
+        wrap.addView(info);
+
+        Spinner game=new Spinner(this);
+        ArrayAdapter<String> games=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,RIOT_GAME_LABELS);
+        games.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        game.setAdapter(games);
+        LinearLayout.LayoutParams gp=new LinearLayout.LayoutParams(-1,-2);
+        gp.topMargin=pad;
+        wrap.addView(game,gp);
+
+        EditText hours=new EditText(this);
+        hours.setHint("Horas totais (ex.: 2350,5)");
+        hours.setSingleLine(true);
+        hours.setInputType(android.text.InputType.TYPE_CLASS_NUMBER|android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        wrap.addView(hours,new LinearLayout.LayoutParams(-1,-2));
+
+        EditText profile=new EditText(this);
+        profile.setHint("URL do seu perfil (opcional)");
+        profile.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        profile.setSingleLine(true);
+        wrap.addView(profile,new LinearLayout.LayoutParams(-1,-2));
+
+        TextView lastImport=new TextView(this);
+        lastImport.setTextColor(getColor(R.color.ludex_muted));
+        wrap.addView(lastImport,new LinearLayout.LayoutParams(-1,-2));
+
+        com.google.android.material.button.MaterialButton openSite=new com.google.android.material.button.MaterialButton(this);
+        openSite.setText("Abrir site de estatísticas");
+        wrap.addView(openSite,new LinearLayout.LayoutParams(-1,-2));
+
+        Runnable showSaved=()->{
+            String key=RIOT_GAME_KEYS[game.getSelectedItemPosition()];
+            LudexDb.RiotPlaytime value=db.getRiotPlaytime(key);
+            String display=value.updatedAt>0?
+                java.math.BigDecimal.valueOf(value.seconds).divide(java.math.BigDecimal.valueOf(3600),6,java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString():"";
+            hours.setText(display);
+            profile.setText(db.getSetting("riot."+key+".profile",""));
+            String date=value.updatedAt>0?new java.text.SimpleDateFormat("dd/MM/yyyy HH:mm",Locale.getDefault()).format(new Date(value.updatedAt)):"Nunca importado";
+            lastImport.setText("Última importação: "+date);
+        };
+        game.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            @Override public void onItemSelected(AdapterView<?> parent,View selected,int position,long id){showSaved.run();}
+            @Override public void onNothingSelected(AdapterView<?> parent){}
+        });
+
+        openSite.setOnClickListener(v->{
+            String key=RIOT_GAME_KEYS[game.getSelectedItemPosition()];
+            String entered=profile.getText()==null?"":profile.getText().toString().trim();
+            if(!validRiotProfileUrl(key,entered)){profile.setError("Use o link HTTPS do site correspondente");return;}
+            String url=entered.isEmpty()?("lol".equals(key)?"https://wol.gg/":"https://tracker.gg/valorant"):entered;
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)));}
+            catch(Exception e){toast("Não foi possível abrir o navegador");}
+        });
+
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle("Importar horas · Riot Games")
+            .setView(wrap)
+            .setNegativeButton("Cancelar",null)
+            .setPositiveButton("Salvar horas",null)
+            .create();
+
+        dialog.setOnShowListener(ignored->dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String raw=hours.getText()==null?"":hours.getText().toString().trim().replace(',','.');
+            long seconds;
+            try{
+                java.math.BigDecimal h=new java.math.BigDecimal(raw);
+                if(h.signum()<0||h.compareTo(new java.math.BigDecimal("1000000"))>0){
+                    hours.setError("Use um total entre 0 e 1.000.000 horas");return;
+                }
+                seconds=h.multiply(java.math.BigDecimal.valueOf(3600)).setScale(0,java.math.RoundingMode.HALF_UP).longValueExact();
+            }catch(Exception e){hours.setError("Informe horas válidas, por exemplo 1250,5");return;}
+            String key=RIOT_GAME_KEYS[game.getSelectedItemPosition()];
+            String url=profile.getText()==null?"":profile.getText().toString().trim();
+            if(!validRiotProfileUrl(key,url)){profile.setError("Use um link HTTPS do WOL.GG ou Tracker.gg correspondente");return;}
+            try{
+                db.saveRiotPlaytime(key,seconds,url);
+                dialog.dismiss();
+                refreshAsync(false);
+                toast("Horas históricas da Riot salvas");
+            }catch(Exception e){toast("Falha ao importar horas: "+e.getMessage());}
+        }));
+        dialog.show();
     }
 
     private static final String[] MANUAL_PLATFORM_LABELS={"Nintendo Switch","PC","Xbox","PlayStation","Outro"};
@@ -982,6 +1093,7 @@ public final class MainActivity extends AppCompatActivity {
             case EPIC:return g.epic||"epic".equals(source);
             case GOG:return "gog".equals(source);
             case XBOX:return "xbox".equals(source)||"microsoft".equals(source);
+            case RIOT:return "riot".equals(source);
             case EMULATED:return g.emulated;
             case OTHER:
                 return !g.steam&&!g.nintendo&&!g.epic&&!g.playstation&&!g.emulated
@@ -1003,6 +1115,7 @@ public final class MainActivity extends AppCompatActivity {
             case EMULATED:return Math.max(0,row.emulatedSeconds);
             case EPIC:return Math.max(0,row.epicSeconds);
             case GOG:return "gog".equals(sourceKey(row))?Math.max(0,row.otherSeconds):0;
+            case RIOT:return "riot".equals(sourceKey(row))?Math.max(0,row.otherSeconds):0;
             case XBOX:{
                 String source=sourceKey(row);
                 return ("xbox".equals(source)||"microsoft".equals(source))?Math.max(0,row.otherSeconds):0;
@@ -1012,6 +1125,7 @@ public final class MainActivity extends AppCompatActivity {
                     &&!rowMatchesLibrary(row,LibraryFilter.GOG)
                     &&!rowMatchesLibrary(row,LibraryFilter.XBOX)
                     &&!rowMatchesLibrary(row,LibraryFilter.PLAYSTATION)
+                    &&!rowMatchesLibrary(row,LibraryFilter.RIOT)
                     ?Math.max(0,row.otherSeconds):0;
             default:return 0;
         }
@@ -1078,6 +1192,7 @@ public final class MainActivity extends AppCompatActivity {
             case "gog":return "GOG";
             case "xbox":case "microsoft":return "Xbox";
             case "pc":return "PC";
+            case "riot":return "Riot Games";
             case "other":return "Manual";
             case "emulated":return "Emulado";
             default:return providerLabel(row.source);
@@ -2845,7 +2960,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private String providerLabel(String source){
         if(source==null)return "Ludex";
-        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "psn":return "PlayStation";case "playstation":return "PlayStation";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";case "nintendo-manual":return "Nintendo";case "xbox-manual":return "Xbox";case "playstation-manual":return "PlayStation";case "pc-manual":return "PC";case "other-manual":return "Manual";default:return source;}
+        switch(source){case "steam":return "Steam";case "steam-family":return "Steam Família";case "epic":return "Epic";case "psn":return "PlayStation";case "playstation":return "PlayStation";case "gog":return "GOG";case "android":return "Android";case "xbox":return "Xbox";case "eden":return "Eden";case "emulator":return "Emulado";case "nintendo":return "Nintendo";case "nintendo-manual":return "Nintendo";case "xbox-manual":return "Xbox";case "playstation-manual":return "PlayStation";case "pc-manual":return "PC";case "other-manual":return "Manual";case "riot":return "Riot Games";case "riot-wolgg":return "WOL.GG";case "riot-trackergg":return "Tracker.gg";default:return source;}
     }
     static String format(long sec){long h=sec/3600,m=(sec%3600)/60;return h>0?h+"h "+m+"min":m+"min";}
     private void toast(String s){Snackbar.make(findViewById(R.id.root),s,Snackbar.LENGTH_LONG).show();}

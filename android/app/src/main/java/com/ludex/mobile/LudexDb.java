@@ -193,6 +193,66 @@ public final class LudexDb extends SQLiteOpenHelper {
         return null;
     }
 
+    /** Horas históricas declaradas pelo usuário; não são sessões medidas pelo Ludex. */
+    public static final class RiotPlaytime {
+        public final long seconds,updatedAt;
+        RiotPlaytime(long seconds,long updatedAt){this.seconds=seconds;this.updatedAt=updatedAt;}
+    }
+
+    private static String riotGameId(String key){
+        if(!"lol".equals(key)&&!"valorant".equals(key))throw new IllegalArgumentException("Jogo Riot inválido");
+        return "riot:"+key;
+    }
+
+    private static String riotProvider(String key){
+        return "lol".equals(key)?"riot-wolgg":"riot-trackergg";
+    }
+
+    public RiotPlaytime getRiotPlaytime(String key){
+        String id=riotGameId(key);
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT seconds,updated_at FROM imported_playtime WHERE game_id=? AND provider=? LIMIT 1",
+            new String[]{id,riotProvider(key)})){
+            if(c.moveToFirst())return new RiotPlaytime(c.getLong(0),c.getLong(1));
+        }
+        return new RiotPlaytime(0,0);
+    }
+
+    /**
+     * Substitui o TOTAL histórico em vez de somar importações repetidas.
+     * IDs estáveis mantêm favoritos/status e permitem agrupar pelo título.
+     */
+    public void saveRiotPlaytime(String key,long seconds,String profileUrl){
+        String id=riotGameId(key);
+        if(seconds<0||seconds>3_600_000_000L)throw new IllegalArgumentException("Horas fora do intervalo permitido");
+        String title="lol".equals(key)?"League of Legends":"VALORANT";
+        long now=System.currentTimeMillis();
+        SQLiteDatabase sqlite=getWritableDatabase();
+        sqlite.beginTransaction();
+        try{
+            ContentValues game=new ContentValues();
+            game.put("id",id);game.put("title",title);game.put("platform","PC");
+            game.put("source","riot");game.put("installed",0);
+            game.put("first_seen_at",now);game.put("updated_at",now);
+            sqlite.insertWithOnConflict("games",null,game,SQLiteDatabase.CONFLICT_IGNORE);
+            ContentValues update=new ContentValues();
+            update.put("title",title);update.put("platform","PC");update.put("source","riot");update.put("updated_at",now);
+            sqlite.update("games",update,"id=?",new String[]{id});
+
+            ContentValues play=new ContentValues();
+            play.put("game_id",id);play.put("provider",riotProvider(key));
+            play.put("seconds",seconds);play.put("updated_at",now);
+            sqlite.insertWithOnConflict("imported_playtime",null,play,SQLiteDatabase.CONFLICT_REPLACE);
+
+            ContentValues setting=new ContentValues();
+            setting.put("key","riot."+key+".profile");
+            setting.put("value",profileUrl==null?"":profileUrl.trim());
+            sqlite.insertWithOnConflict("settings",null,setting,SQLiteDatabase.CONFLICT_REPLACE);
+            sqlite.delete("hidden_games","game_id=?",new String[]{id});
+            sqlite.setTransactionSuccessful();
+        }finally{sqlite.endTransaction();}
+    }
+
     public boolean isManualGame(String gameId){
         try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM manual_games WHERE game_id=? LIMIT 1",new String[]{gameId})){
             return c.moveToFirst();
@@ -1125,7 +1185,17 @@ public final class LudexDb extends SQLiteOpenHelper {
 
     private void importPlaytime(SQLiteDatabase db,JSONObject x){
         String game=x.optString("game_id"),provider=x.optString("provider");if(game.isEmpty()||provider.isEmpty())return;long seconds=Math.max(0,x.optLong("seconds"));long updated=parseTime(x,"updated_at","updated_at_ms");
-        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",updated>0?updated:System.currentTimeMillis());db.insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);db.execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=MAX(updated_at,?) WHERE game_id=? AND provider=?",new Object[]{seconds,updated,game,provider});
+        long stamp=updated>0?updated:System.currentTimeMillis();
+        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",stamp);
+        db.insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+        if(provider.startsWith("riot-")){
+            // Totais históricos substituem valores antigos apenas quando a importação é mais recente.
+            db.execSQL("UPDATE imported_playtime SET seconds=?,updated_at=? WHERE game_id=? AND provider=? AND updated_at<?",
+                new Object[]{seconds,stamp,game,provider,stamp});
+        }else{
+            db.execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=MAX(updated_at,?) WHERE game_id=? AND provider=?",
+                new Object[]{seconds,stamp,game,provider});
+        }
     }
     private static long parseTime(JSONObject o,String isoKey,String msKey){
         if(o.has(msKey))return o.optLong(msKey,0);
