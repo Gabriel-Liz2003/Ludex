@@ -2233,26 +2233,44 @@ public final class MainActivity extends AppCompatActivity {
             String hours=game.seconds<0?"horas não disponíveis":format(game.seconds);
             names[i]=game.name+" · "+hours;
         }
-        new MaterialAlertDialogBuilder(this)
-            .setTitle("Jogos que você jogou no Game Pass")
-            .setMessage("Marque SOMENTE os jogos acessados pelo Game Pass. O histórico Xbox inclui compras e outros jogos. Seleções anteriores são mantidas mesmo se não aparecerem nesta consulta.")
-            .setMultiChoiceItems(names,checked,(dialog,which,isChecked)->{
+        // Android AlertDialog can't display setMessage together with setMultiChoiceItems:
+        // the message occupies the content area and hides the selectable rows.
+        androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
+            .setTitle("Game Pass: selecione jogos ("+games.size()+")")
+            .setMultiChoiceItems(names,checked,(d,which,isChecked)->{
                 String id=games.get(which).titleId;
                 if(isChecked)selected.add(id);else selected.remove(id);
             })
             .setNegativeButton("Cancelar",null)
-            .setPositiveButton("Importar selecionados",(dialog,w)->{
+            .setNeutralButton("Como funciona?",(d,which)->new MaterialAlertDialogBuilder(this)
+                .setTitle("Escolha apenas jogos do Game Pass")
+                .setMessage("O histórico Xbox também inclui jogos comprados e gratuitos. Selecione apenas os que você jogou pelo Game Pass. Jogos já selecionados que não aparecem neste histórico continuam preservados.")
+                .setPositiveButton("Entendi",null)
+                .show())
+            .setPositiveButton("Importar selecionados",null)
+            .create();
+        dialog.setOnShowListener(ignored->
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                if(selected.isEmpty()){
+                    toast("Marque pelo menos um jogo antes de importar");
+                    return;
+                }
+                dialog.dismiss();
                 io.execute(()->{
-                    int imported=db.syncSelectedXboxGames(games,selected,true);
-                    db.setSetting("xbox.last_sync_ms",Long.toString(System.currentTimeMillis()));
-                    runOnUiThread(()->{
-                        updateXboxSyncInfo();
-                        reloadLibraryAsync();
-                        toast(imported+" jogos Xbox importados ou atualizados");
-                    });
+                    try{
+                        int imported=db.syncSelectedXboxGames(games,selected,true);
+                        db.setSetting("xbox.last_sync_ms",Long.toString(System.currentTimeMillis()));
+                        runOnUiThread(()->{
+                            updateXboxSyncInfo();
+                            reloadLibraryAsync();
+                            toast(imported+" jogos Xbox importados ou atualizados");
+                        });
+                    }catch(Exception error){
+                        runOnUiThread(()->toast("Falha ao importar seleção Xbox: "+error.getMessage()));
+                    }
                 });
-            })
-            .show();
+            }));
+        dialog.show();
     }
 
     private int syncXboxGamesNow() throws Exception{
