@@ -258,7 +258,7 @@ SELECT g.id, g.title, g.platform, g.source,
          COALESCE((SELECT SUM(seconds) FROM imported_playtime ip WHERE ip.game_id=g.id), 0)
        ),
        EXISTS(SELECT 1 FROM installations i WHERE i.game_id=g.id AND i.installed=1),
-       COALESCE((SELECT GROUP_CONCAT(provider) FROM (SELECT DISTINCT provider FROM installations i2 WHERE i2.game_id=g.id)), ''),
+       COALESCE(NULLIF((SELECT GROUP_CONCAT(provider) FROM (SELECT DISTINCT provider FROM installations i2 WHERE i2.game_id=g.id)), ''), CASE WHEN g.source='riot' THEN 'riot' ELSE '' END),
        EXISTS(SELECT 1 FROM play_sessions aps WHERE aps.game_id=g.id AND aps.ended_at IS NULL),
        (SELECT MAX(COALESCE(ended_at, started_at)) FROM play_sessions lps WHERE lps.game_id=g.id),
        (SELECT COUNT(*) FROM play_sessions cps WHERE cps.game_id=g.id AND cps.ended_at IS NOT NULL)
