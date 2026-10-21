@@ -523,6 +523,80 @@ fn remote_is_newer(local: Option<String>, remote: Option<&str>) -> bool {
     }
 }
 
+fn riot_source(key: &str) -> Result<(&'static str, &'static str, &'static str), String> {
+    match key {
+        "lol" => Ok(("League of Legends", "riot:lol", "riot-wolgg")),
+        "valorant" => Ok(("VALORANT", "riot:valorant", "riot-trackergg")),
+        _ => Err("Jogo Riot inválido".into()),
+    }
+}
+
+pub fn riot_playtime(
+    c: &Connection,
+    key: &str,
+) -> Result<(i64, Option<String>, Option<String>), String> {
+    let (_, game_id, provider) = riot_source(key)?;
+    let existing: Option<(i64, String)> = c
+        .query_row(
+            "SELECT seconds,updated_at FROM imported_playtime WHERE game_id=?1 AND provider=?2",
+            params![game_id, provider],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let url = db::get_setting(c, &format!("riot.{key}.profile"))?;
+    Ok((
+        existing.as_ref().map_or(0, |x| x.0),
+        url,
+        existing.map(|x| x.1),
+    ))
+}
+
+pub fn save_riot_playtime(
+    c: &mut Connection,
+    key: &str,
+    seconds: i64,
+    profile_url: Option<&str>,
+) -> Result<(), String> {
+    let (title, game_id, provider) = riot_source(key)?;
+    if !(0..=3_600_000_000).contains(&seconds) {
+        return Err("Horas fora do intervalo permitido".into());
+    }
+    let url = profile_url.unwrap_or("").trim();
+    if !url.is_empty() {
+        let parsed = reqwest::Url::parse(url).map_err(|_| "URL de perfil inválida")?;
+        let domain = if key == "lol" { "wol.gg" } else { "tracker.gg" };
+        let host = parsed.host_str().unwrap_or("");
+        if parsed.scheme() != "https"
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || !(host == domain || host.ends_with(&format!(".{domain}")))
+        {
+            return Err("Informe uma URL HTTPS do site correspondente".into());
+        }
+    }
+    let now = Utc::now().to_rfc3339();
+    let tx = c.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO games(id,title,normalized_title,platform,source,updated_at) VALUES(?1,?2,?3,'PC','riot',?4)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title,normalized_title=excluded.normalized_title,platform='PC',source='riot',updated_at=excluded.updated_at",
+        params![game_id, title, normalize_title(title), now],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO imported_playtime(game_id,provider,seconds,updated_at) VALUES(?1,?2,?3,?4)
+         ON CONFLICT(game_id,provider) DO UPDATE SET seconds=excluded.seconds,updated_at=excluded.updated_at",
+        params![game_id, provider, seconds, now],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![format!("riot.{key}.profile"), url],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 pub fn import_sync_json(c: &mut Connection, json: &str) -> Result<SyncSummary, String> {
     let root: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("Sync inválido: {e}"))?;
@@ -647,7 +721,23 @@ pub fn import_sync_json(c: &mut Connection, json: &str) -> Result<SyncSummary, S
         for x in items {
             if let (Some(game), Some(provider)) = (json_str(x, "game_id"), json_str(x, "provider"))
             {
-                tx.execute("INSERT INTO imported_playtime(game_id,provider,seconds,updated_at) VALUES(?1,?2,?3,COALESCE(?4,CURRENT_TIMESTAMP)) ON CONFLICT(game_id,provider) DO UPDATE SET seconds=MAX(imported_playtime.seconds,excluded.seconds),updated_at=excluded.updated_at",params![game,provider,x.get("seconds").and_then(|v|v.as_i64()).unwrap_or(0),json_str(x,"updated_at")]).map_err(|e|e.to_string())?;
+                let mobile_at = x
+                    .get("updated_at_ms")
+                    .and_then(|v| v.as_i64())
+                    .and_then(ms_rfc3339);
+                let updated = json_str(x, "updated_at").or(mobile_at.as_deref());
+                let seconds = x.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0);
+                if provider.starts_with("riot-") {
+                    tx.execute(
+                        "INSERT INTO imported_playtime(game_id,provider,seconds,updated_at) VALUES(?1,?2,?3,COALESCE(?4,CURRENT_TIMESTAMP))
+                         ON CONFLICT(game_id,provider) DO UPDATE SET seconds=excluded.seconds,updated_at=excluded.updated_at
+                         WHERE julianday(excluded.updated_at) > julianday(imported_playtime.updated_at)",
+                        params![game, provider, seconds, updated],
+                    )
+                    .map_err(|e| e.to_string())?;
+                } else {
+                    tx.execute("INSERT INTO imported_playtime(game_id,provider,seconds,updated_at) VALUES(?1,?2,?3,COALESCE(?4,CURRENT_TIMESTAMP)) ON CONFLICT(game_id,provider) DO UPDATE SET seconds=MAX(imported_playtime.seconds,excluded.seconds),updated_at=excluded.updated_at",params![game,provider,seconds,updated]).map_err(|e|e.to_string())?;
+                }
             }
         }
     }
