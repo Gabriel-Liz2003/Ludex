@@ -1036,14 +1036,25 @@ public final class MainActivity extends AppCompatActivity {
         if(game.renpy)return filter==LibraryFilter.RENPY;
         if(filter==LibraryFilter.RENPY)return false;
         if(filter==LibraryFilter.ALL)return game.seconds>0;
+        if(filter==LibraryFilter.XBOX){
+            for(LudexDb.GameRow row:game.variants)if("xbox".equals(row.source))return true;
+        }
         for(LudexDb.GameRow row:game.variants){
             if(rowHasPlaytimeForFilter(row,filter))return true;
         }
         return false;
     }
 
+    private static boolean hasXboxHistoryVariant(DisplayGame game){
+        for(LudexDb.GameRow row:game.variants)if("xbox".equals(row.source))return true;
+        return false;
+    }
+
     private boolean groupMatchesTab(DisplayGame game,Tab mode){
         if(game.renpy)return mode==Tab.LIBRARY&&libraryFilter==LibraryFilter.RENPY;
+        if(mode==Tab.LIBRARY&&libraryFilter==LibraryFilter.XBOX){
+            for(LudexDb.GameRow row:game.variants)if("xbox".equals(row.source))return true;
+        }
         if(mode!=Tab.LIBRARY&&mode!=Tab.ANDROID&&mode!=Tab.EMULATED)return true;
         for(LudexDb.GameRow row:game.variants){
             if(mode==Tab.ANDROID&&row.androidSeconds>0)return true;
@@ -1144,6 +1155,7 @@ public final class MainActivity extends AppCompatActivity {
             if(manual!=null&&!manual.imageUri.isBlank())score+=450;
             if(row.steam)score+=400;
             if(row.epic)score+=350;
+            if("xbox".equals(row.source))score+=330;
             if(row.playstation)score+=325;
             if(row.nintendo)score+=300;
             if(row.gameNative)score+=200;
@@ -2733,6 +2745,13 @@ public final class MainActivity extends AppCompatActivity {
             loadArtworkAsync("psn:"+psnInfo.titleId,view,expectedTag,()->PsnArtworkLoader.load(this,psnInfo.titleId,psnInfo.imageUrl));
             return;
         }
+        if("xbox".equals(g.source)){
+            String image=db.xboxImageForGame(g.id);
+            if(!image.isBlank()){
+                loadArtworkAsync("xbox:"+g.id,view,expectedTag,()->XboxArtworkLoader.load(this,g.id,image));
+            }
+            return;
+        }
         if("nintendo".equals(g.source)){
             LudexDb.NintendoInfo n=db.getNintendoInfo(g.id);
             if(n!=null&&!n.imageUrl.isBlank()){
@@ -2817,7 +2836,7 @@ public final class MainActivity extends AppCompatActivity {
         void filter(String query,Tab mode){
             shown.clear();String q=query==null?"":query.trim().toLowerCase(Locale.ROOT);
             for(DisplayGame g:all){
-                if(g.seconds<=0&&!g.renpy)continue;
+                if(g.seconds<=0&&!g.renpy&&!(libraryFilter==LibraryFilter.XBOX&&hasXboxHistoryVariant(g)))continue;
                 if(!groupMatchesTab(g,mode))continue;
                 if(!groupMatchesLibrary(g,libraryFilter))continue;
                 if(!q.isEmpty()&&!g.title.toLowerCase(Locale.ROOT).contains(q)&&!librariesLabel(g).toLowerCase(Locale.ROOT).contains(q))continue;
