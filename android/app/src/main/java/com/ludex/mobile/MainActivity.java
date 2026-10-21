@@ -2886,6 +2886,7 @@ public final class MainActivity extends AppCompatActivity {
 
         // Never look up private, local APK or manually entered games by title.
         String source=g.source==null?"":g.source.toLowerCase(Locale.ROOT);
+        view.setScaleType("riot".equals(source)?ImageView.ScaleType.FIT_CENTER:ImageView.ScaleType.CENTER_CROP);
         boolean publicCatalog=g.steam||g.epic||g.playstation||g.nintendo||
             "xbox".equals(source)||"riot".equals(source)||"gog".equals(source);
         String key=publicCatalog?SecretStore.get(this,"steamgriddb.api_key"):"";
