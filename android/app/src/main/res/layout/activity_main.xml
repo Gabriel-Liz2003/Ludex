@@ -166,6 +166,27 @@
                     android:text="Ver pendências Epic"/>
 
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp" android:text="Xbox / Game Pass"
+                    android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
+                <TextView android:id="@+id/xbox_sync_info"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Importe somente os jogos que você já jogou no Game Pass. Histórico e horas via OpenXBL."
+                    android:textColor="@color/ludex_muted" android:textSize="13sp"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/xbox_config"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" android:text="Configurar OpenXBL"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/xbox_select"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Escolher jogos jogados no Game Pass"/>
+                <com.google.android.material.button.MaterialButton android:id="@+id/xbox_sync"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Sincronizar meus jogos Xbox"/>
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="20dp" android:text="PlayStation Network"
                     android:textColor="@color/ludex_text" android:textStyle="bold" android:textSize="18sp"/>
                 <TextView android:id="@+id/psn_sync_info" android:layout_width="match_parent" android:layout_height="wrap_content"
