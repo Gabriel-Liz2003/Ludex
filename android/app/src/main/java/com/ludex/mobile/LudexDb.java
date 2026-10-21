@@ -1185,7 +1185,17 @@ public final class LudexDb extends SQLiteOpenHelper {
 
     private void importPlaytime(SQLiteDatabase db,JSONObject x){
         String game=x.optString("game_id"),provider=x.optString("provider");if(game.isEmpty()||provider.isEmpty())return;long seconds=Math.max(0,x.optLong("seconds"));long updated=parseTime(x,"updated_at","updated_at_ms");
-        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",updated>0?updated:System.currentTimeMillis());db.insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);db.execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=MAX(updated_at,?) WHERE game_id=? AND provider=?",new Object[]{seconds,updated,game,provider});
+        long stamp=updated>0?updated:System.currentTimeMillis();
+        ContentValues v=new ContentValues();v.put("game_id",game);v.put("provider",provider);v.put("seconds",seconds);v.put("updated_at",stamp);
+        db.insertWithOnConflict("imported_playtime",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+        if(provider.startsWith("riot-")){
+            // Totais históricos substituem valores antigos apenas quando a importação é mais recente.
+            db.execSQL("UPDATE imported_playtime SET seconds=?,updated_at=? WHERE game_id=? AND provider=? AND updated_at<?",
+                new Object[]{seconds,stamp,game,provider,stamp});
+        }else{
+            db.execSQL("UPDATE imported_playtime SET seconds=MAX(seconds,?),updated_at=MAX(updated_at,?) WHERE game_id=? AND provider=?",
+                new Object[]{seconds,stamp,game,provider});
+        }
     }
     private static long parseTime(JSONObject o,String isoKey,String msKey){
         if(o.has(msKey))return o.optLong(msKey,0);
