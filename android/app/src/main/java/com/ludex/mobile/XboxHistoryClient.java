@@ -63,7 +63,7 @@ public final class XboxHistoryClient {
             seen.putIfAbsent(id,new Game(id,name,image,devices,-1,last));
         }
 
-        HashMap<String,Long> stats=fetchMinutes(apiKey,xuid,new ArrayList<>(seen.keySet()));
+        Map<String,Long> stats=fetchMinutes(apiKey,xuid,new ArrayList<>(seen.keySet()));
         ArrayList<Game> out=new ArrayList<>();
         for(Game game:seen.values()){
             Long minutes=stats.get(game.titleId);
