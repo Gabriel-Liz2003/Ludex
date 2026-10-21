@@ -2233,20 +2233,30 @@ public final class MainActivity extends AppCompatActivity {
             String hours=game.seconds<0?"horas não disponíveis":format(game.seconds);
             names[i]=game.name+" · "+hours;
         }
-        // Android AlertDialog can't display setMessage together with setMultiChoiceItems:
-        // the message occupies the content area and hides the selectable rows.
+        // setMessage() and setMultiChoiceItems() compete for AlertDialog content.
+        // Use a custom heading so the guidance remains visible above the actual list.
+        int pad=(int)(20*getResources().getDisplayMetrics().density);
+        LinearLayout heading=new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
+        heading.setPadding(pad,pad,pad,pad/2);
+        TextView headingTitle=new TextView(this);
+        headingTitle.setText("Game Pass: selecione jogos ("+games.size()+")");
+        headingTitle.setTextSize(20);
+        headingTitle.setTextColor(getColor(R.color.ludex_text));
+        heading.addView(headingTitle);
+        TextView hint=new TextView(this);
+        hint.setText("Marque apenas os jogos acessados pelo Game Pass. O histórico Xbox também inclui compras e jogos gratuitos.");
+        hint.setTextSize(13);
+        hint.setTextColor(getColor(R.color.ludex_muted));
+        hint.setPadding(0,pad/2,0,0);
+        heading.addView(hint);
         androidx.appcompat.app.AlertDialog dialog=new MaterialAlertDialogBuilder(this)
-            .setTitle("Game Pass: selecione jogos ("+games.size()+")")
+            .setCustomTitle(heading)
             .setMultiChoiceItems(names,checked,(d,which,isChecked)->{
                 String id=games.get(which).titleId;
                 if(isChecked)selected.add(id);else selected.remove(id);
             })
             .setNegativeButton("Cancelar",null)
-            .setNeutralButton("Como funciona?",(d,which)->new MaterialAlertDialogBuilder(this)
-                .setTitle("Escolha apenas jogos do Game Pass")
-                .setMessage("O histórico Xbox também inclui jogos comprados e gratuitos. Selecione apenas os que você jogou pelo Game Pass. Jogos já selecionados que não aparecem neste histórico continuam preservados.")
-                .setPositiveButton("Entendi",null)
-                .show())
             .setPositiveButton("Importar selecionados",null)
             .create();
         dialog.setOnShowListener(ignored->
