@@ -160,6 +160,53 @@ pub fn game_totals(sources: &[LibrarySource]) -> HashMap<String, i64> {
     result
 }
 
+/// Keep desktop statistics aligned with the same cross-platform totals shown
+/// in the library, rather than using a session-only provider chart.
+pub fn augment_stats(
+    c: &Connection,
+    stats: &mut crate::product_models::LibraryStats,
+) -> Result<(), String> {
+    let sources = list(c)?;
+    let private_games: std::collections::HashSet<&str> = sources
+        .iter()
+        .filter(|s| s.private)
+        .map(|s| s.game_id.as_str())
+        .collect();
+    let games = crate::db::list_games(c)?;
+    stats.never_played = games
+        .iter()
+        .filter(|g| !private_games.contains(g.id.as_str()) && g.total_seconds == 0)
+        .count() as i64;
+
+    let mut top: Vec<_> = games
+        .into_iter()
+        .filter(|g| !private_games.contains(g.id.as_str()) && g.total_seconds > 0)
+        .map(|g| crate::product_models::NamedTime {
+            name: g.title,
+            seconds: g.total_seconds,
+        })
+        .collect();
+    top.sort_by(|a, b| b.seconds.cmp(&a.seconds));
+    top.truncate(10);
+    stats.top_games = top;
+
+    let mut totals = BTreeMap::<String, i64>::new();
+    for item in sources {
+        if item.private || item.seconds <= 0 {
+            continue;
+        }
+        let entry = totals.entry(item.source).or_default();
+        *entry = entry.saturating_add(item.seconds);
+    }
+    let mut providers: Vec<_> = totals
+        .into_iter()
+        .map(|(name, seconds)| crate::product_models::NamedTime { name, seconds })
+        .collect();
+    providers.sort_by(|a, b| b.seconds.cmp(&a.seconds));
+    stats.by_provider = providers;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
