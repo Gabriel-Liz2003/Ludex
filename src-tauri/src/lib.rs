@@ -1,6 +1,7 @@
 mod db;
 mod emulation;
 mod identity;
+mod library_sources;
 mod metadata;
 mod models;
 mod process_monitor;
@@ -46,6 +47,13 @@ fn open_product(path: &Path) -> Result<rusqlite::Connection, String> {
 fn list_games(state: tauri::State<'_, AppState>) -> Result<Vec<Game>, String> {
     db::list_games(&open_product(&state.db_path)?)
 }
+#[tauri::command]
+fn list_library_sources(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<library_sources::LibrarySource>, String> {
+    library_sources::list(&open_product(&state.db_path)?)
+}
+
 #[tauri::command]
 fn get_game_details(
     state: tauri::State<'_, AppState>,
@@ -474,7 +482,10 @@ fn launch_rom(state: tauri::State<'_, AppState>, rom_id: String) -> Result<Launc
 
 #[tauri::command]
 fn library_stats(state: tauri::State<'_, AppState>) -> Result<LibraryStats, String> {
-    product::library_stats(&open_product(&state.db_path)?)
+    let connection = open_product(&state.db_path)?;
+    let mut stats = product::library_stats(&connection)?;
+    library_sources::augment_stats(&connection, &mut stats)?;
+    Ok(stats)
 }
 #[tauri::command]
 fn export_backup_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -647,6 +658,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_games,
+            list_library_sources,
             get_game_details,
             add_manual_game,
             riot_playtime,
