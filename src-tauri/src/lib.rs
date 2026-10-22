@@ -482,7 +482,10 @@ fn launch_rom(state: tauri::State<'_, AppState>, rom_id: String) -> Result<Launc
 
 #[tauri::command]
 fn library_stats(state: tauri::State<'_, AppState>) -> Result<LibraryStats, String> {
-    product::library_stats(&open_product(&state.db_path)?)
+    let connection = open_product(&state.db_path)?;
+    let mut stats = product::library_stats(&connection)?;
+    library_sources::augment_stats(&connection, &mut stats)?;
+    Ok(stats)
 }
 #[tauri::command]
 fn export_backup_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
