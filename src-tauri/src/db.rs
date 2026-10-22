@@ -264,6 +264,16 @@ SELECT g.id, g.title, g.platform, g.source,
        (SELECT COUNT(*) FROM play_sessions cps WHERE cps.game_id=g.id AND cps.ended_at IS NOT NULL)
 FROM games g";
 
+fn append_game_source(game: &mut Game, source: &str) {
+    if !game
+        .providers
+        .iter()
+        .any(|provider| crate::library_sources::normalize_source(provider) == source)
+    {
+        game.providers.push(source.to_string());
+    }
+}
+
 pub fn list_games(connection: &Connection) -> Result<Vec<Game>, String> {
     let sql = format!("{GAME_SELECT} ORDER BY g.favorite DESC, g.title COLLATE NOCASE");
     let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
@@ -275,13 +285,20 @@ pub fn list_games(connection: &Connection) -> Result<Vec<Game>, String> {
         .map_err(|e| e.to_string())?;
     let sources = crate::library_sources::list(connection)?;
     let totals = crate::library_sources::game_totals(&sources);
+    let mut by_game = std::collections::HashMap::<&str, Vec<&str>>::new();
+    for source in &sources {
+        by_game
+            .entry(source.game_id.as_str())
+            .or_default()
+            .push(source.source.as_str());
+    }
     for game in &mut games {
         if let Some(seconds) = totals.get(&game.id) {
             game.total_seconds = *seconds;
         }
-        for row in sources.iter().filter(|row| row.game_id == game.id) {
-            if !game.providers.iter().any(|p| crate::library_sources::normalize_source(p) == row.source) {
-                game.providers.push(row.source.clone());
+        if let Some(source_names) = by_game.get(game.id.as_str()) {
+            for source in source_names {
+                append_game_source(game, source);
             }
         }
     }
@@ -469,9 +486,7 @@ pub fn get_game_details(
         game.total_seconds = *seconds;
     }
     for row in sources.iter().filter(|row| row.game_id == game_id) {
-        if !game.providers.iter().any(|p| crate::library_sources::normalize_source(p) == row.source) {
-            game.providers.push(row.source.clone());
-        }
+        append_game_source(&mut game, &row.source);
     }
 
     let mut stats = connection.query_row(
@@ -495,7 +510,10 @@ pub fn get_game_details(
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
-    stats.total_seconds = totals.get(game_id).copied().unwrap_or_else(|| stats.total_seconds.max(imported_total));
+    stats.total_seconds = totals
+        .get(game_id)
+        .copied()
+        .unwrap_or_else(|| stats.total_seconds.max(imported_total));
 
     let mut installation_stmt = connection.prepare(
         "SELECT id, game_id, provider, external_id, executable, install_dir, working_dir, launch_args, installed FROM installations WHERE game_id=?1 ORDER BY installed DESC, provider"
