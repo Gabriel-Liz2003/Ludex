@@ -22,6 +22,14 @@ struct Totals {
 /// for the same provider: they may be snapshots of overlapping playtime.
 pub fn normalize_source(raw: &str) -> String {
     let source = raw.trim().to_ascii_lowercase();
+    if source.starts_with("nintendo-") { return "nintendo".into(); }
+    if source.starts_with("psn-") || source.starts_with("playstation-") { return "playstation".into(); }
+    if source.starts_with("steam-") { return "steam".into(); }
+    if source.starts_with("epic-") { return "epic".into(); }
+    if source.starts_with("eden-") || source.starts_with("emulator-") { return "emulation".into(); }
+    if source.starts_with("android-renpy") || source == "renpy-save" { return "renpy".into(); }
+    if source.starts_with("android-") { return "android".into(); }
+    if source.starts_with("riot-") { return "riot".into(); }
     match source.as_str() {
         "riot" | "riot-wolgg" | "riot-trackergg" | "riot-tracker" => "riot".into(),
         "renpy" | "android-renpy-save" | "android-renpy" => "renpy".into(),
@@ -131,5 +139,7 @@ mod tests {
         assert_eq!(normalize_source("android-renpy-save"),"renpy");
         assert_eq!(normalize_source("riot-trackergg"),"riot");
         assert_eq!(normalize_source("steam-family"),"steam");
+        assert_eq!(normalize_source("nintendo-account"),"nintendo");
+        assert_eq!(normalize_source("renpy-save"),"renpy");
     }
 }
