@@ -34,7 +34,7 @@ function availableSources(){return [...new Set(librarySources.map(x=>x.source))]
 function rebuildSourceIndex(){sourcesByGame=new Map();for(const x of librarySources){const current=sourcesByGame.get(x.game_id)||[];current.push(x);sourcesByGame.set(x.game_id,current)}}
 const initials=(title:string)=>title.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
 
-function shell(){app.innerHTML=`<div class="app-shell"><aside class="rail"><div class="brand"><b>Ludex</b><span>0.9.5</span></div><nav>
+function shell(){app.innerHTML=`<div class="app-shell"><aside class="rail"><div class="brand"><b>Ludex</b><span>0.9.6</span></div><nav>
 ${[['library','Biblioteca'],['libraries','Plataformas'],['store','Loja'],['recent','Recentes'],['favorites','Favoritos'],['installed','Instalados'],['collections','Coleções'],['emulation','Emulação'],['stats','Estatísticas'],['sync','Sincronização'],['settings','Configurações'],['diagnostics','Diagnóstico']].map(([id,n])=>`<button data-view="${id}" class="nav-btn ${view===id?'active':''}">${n}</button>`).join('')}
 </nav><div class="privacy">Local-first<br><span>Sem conta obrigatória</span></div></aside><main><header class="topbar"><div><p class="eyebrow">Biblioteca universal</p><h1 id="view-title">Ludex</h1></div><div class="top-actions"><input id="search" value="${esc(query)}" placeholder="Buscar jogos"><button id="add-manual" class="ghost">+ Jogo</button></div></header><div id="content"></div></main></div><div id="modal-root"></div>`;
  document.querySelectorAll<HTMLElement>('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view!;shell();void renderView()});
