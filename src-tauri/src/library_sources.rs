@@ -91,8 +91,7 @@ pub fn list(c: &Connection) -> Result<Vec<LibrarySource>, String> {
         for item in iter {
             let (id, source) = item.map_err(|e| e.to_string())?;
             let normalized = normalize_source(&source);
-            totals.entry((id, normalized.clone())).or_default().private |=
-                normalized == "renpy";
+            totals.entry((id, normalized.clone())).or_default().private |= normalized == "renpy";
         }
     }
     {
@@ -214,10 +213,8 @@ mod tests {
 
     #[test]
     fn separates_platforms_without_double_counting_snapshots() {
-        let path = std::env::temp_dir().join(format!(
-            "ludex-library-sources-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ludex-library-sources-{}.db", uuid::Uuid::new_v4()));
         let conn = db::open(&path).unwrap();
         product::migrate(&conn).unwrap();
         conn.execute(
