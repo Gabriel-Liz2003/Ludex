@@ -270,8 +270,22 @@ pub fn list_games(connection: &Connection) -> Result<Vec<Game>, String> {
     let rows = statement
         .query_map([], row_to_game)
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let mut games = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let sources = crate::library_sources::list(connection)?;
+    let totals = crate::library_sources::game_totals(&sources);
+    for game in &mut games {
+        if let Some(seconds) = totals.get(&game.id) {
+            game.total_seconds = *seconds;
+        }
+        for row in sources.iter().filter(|row| row.game_id == game.id) {
+            if !game.providers.iter().any(|p| crate::library_sources::normalize_source(p) == row.source) {
+                game.providers.push(row.source.clone());
+            }
+        }
+    }
+    Ok(games)
 }
 
 pub fn add_manual_game(
@@ -446,9 +460,19 @@ pub fn get_game_details(
         .query_row(&sql, [game_id], row_to_game)
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some(game) = game else {
+    let Some(mut game) = game else {
         return Ok(None);
     };
+    let sources = crate::library_sources::list(connection)?;
+    let totals = crate::library_sources::game_totals(&sources);
+    if let Some(seconds) = totals.get(game_id) {
+        game.total_seconds = *seconds;
+    }
+    for row in sources.iter().filter(|row| row.game_id == game_id) {
+        if !game.providers.iter().any(|p| crate::library_sources::normalize_source(p) == row.source) {
+            game.providers.push(row.source.clone());
+        }
+    }
 
     let mut stats = connection.query_row(
         "SELECT COALESCE(SUM(CASE WHEN ended_at IS NOT NULL THEN duration_seconds ELSE 0 END),0),
@@ -471,7 +495,7 @@ pub fn get_game_details(
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
-    stats.total_seconds = stats.total_seconds.max(imported_total);
+    stats.total_seconds = totals.get(game_id).copied().unwrap_or_else(|| stats.total_seconds.max(imported_total));
 
     let mut installation_stmt = connection.prepare(
         "SELECT id, game_id, provider, external_id, executable, install_dir, working_dir, launch_args, installed FROM installations WHERE game_id=?1 ORDER BY installed DESC, provider"
