@@ -1,6 +1,7 @@
 mod db;
 mod emulation;
 mod identity;
+mod library_sources;
 mod metadata;
 mod models;
 mod process_monitor;
@@ -46,6 +47,13 @@ fn open_product(path: &Path) -> Result<rusqlite::Connection, String> {
 fn list_games(state: tauri::State<'_, AppState>) -> Result<Vec<Game>, String> {
     db::list_games(&open_product(&state.db_path)?)
 }
+#[tauri::command]
+fn list_library_sources(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<library_sources::LibrarySource>, String> {
+    library_sources::list(&open_product(&state.db_path)?)
+}
+
 #[tauri::command]
 fn get_game_details(
     state: tauri::State<'_, AppState>,
@@ -647,6 +655,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_games,
+            list_library_sources,
             get_game_details,
             add_manual_game,
             riot_playtime,
