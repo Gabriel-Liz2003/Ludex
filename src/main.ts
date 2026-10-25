@@ -168,6 +168,77 @@ async function renderSync(){
   const androidCount=games.filter(g=>gameSources(g).some(s=>s.source==='android')).length;
   const remoteCount=games.filter(g=>gameSources(g).some(s=>['nintendo','playstation','xbox','riot'].includes(s.source))).length;
   document.querySelector('#content')!.innerHTML=`<section class="page"><div class="page-actions"><div><h2>Windows ↔ Android</h2><p class="muted">Compartilhe biblioteca, horas, status e favoritos entre seus aparelhos sem depender de servidor ou scraping.</p></div></div><div class="stat-cards"><article><b>${games.length}</b><span>Jogos locais</span></article><article><b>${androidCount}</b><span>Jogos de Android</span></article><article><b>${remoteCount}</b><span>Jogos de consoles / Riot</span></article></div><div class="settings-panels"><article><h3>Importar do celular</h3><p>Android → Sync → Exportar JSON; envie o arquivo ao Windows e selecione abaixo. O importador reconhece dados Android e backups Ludex Desktop e evita duplicar sessões.</p><input type="file" id="sync-file" accept=".json,application/json" hidden><button id="choose-sync" class="primary">Escolher arquivo JSON</button><p id="sync-result" class="muted"></p></article><article><h3>Exportar para Android</h3><p>Gere um backup JSON do Windows que o aplicativo Android consegue importar em Sync → Importar JSON.</p><button id="download-sync" class="ghost">Salvar backup JSON</button><p class="muted">O arquivo pode incluir títulos, horas e metadados pessoais. Escolha com cuidado onde salvá-lo.</p></article></div><article class="sync-note"><h3>O que sincroniza?</h3><p>Jogos, tempo importado, sessões finalizadas e estado da biblioteca. Alguns recursos próprios do Android (Shizuku, leitura de APKs, Usage Access) continuam sendo executados no celular.</p><p>A biblioteca privada Ren’Py é excluída pela exportação padrão do Android. Não há compartilhamento de rede automático.</p></article></section>`;
+  // All locally supported launchers appear in Sync, not only Steam.
+  const providerIds=['steam','epic','gog','xbox','ea','ubisoft','battlenet'];
+  const providerDescription:Record<string,string>={
+    steam:'Jogos instalados; conta e horas históricas com Steam Web API Key.',
+    epic:'Jogos instalados via manifests locais do Epic Launcher.',
+    gog:'Instalações GOG Galaxy ou jogos DRM-free detectáveis.',
+    xbox:'Jogos Xbox / Microsoft Store presentes neste Windows.',
+    ea:'Instalações detectáveis do EA App.',
+    ubisoft:'Instalações detectáveis do Ubisoft Connect.',
+    battlenet:'Instalações detectáveis do Battle.net.'
+  };
+  const section=document.createElement('section');
+  section.className='provider-sync-area';
+  section.innerHTML=`<div class="page-actions"><div><h2>Sincronizar launchers deste PC</h2><p class="muted">Buscas locais: Steam, Epic, GOG, Xbox / Game Pass, EA, Ubisoft e Battle.net. Não é necessário conectar contas para encontrar instalações detectáveis.</p></div><button class="primary" id="sync-all-platforms">Sincronizar todos</button></div>
+  <div id="provider-sync-results" class="muted" aria-live="polite"></div>
+  <div class="provider-grid">${providerIds.map(id=>`<article><div class="provider-head"><h3>${esc(providerLabel(id))}</h3><span class="pill" id="provider-status-${id}">Verificar</span></div><p>${esc(providerDescription[id])}</p><small id="provider-info-${id}">Aguardando diagnóstico</small><div class="provider-foot"><button class="ghost" data-sync-local="${id}">Sincronizar ${esc(providerLabel(id))}</button></div></article>`).join('')}</div>
+  <h2>Plataformas vinculadas pelo celular</h2><div class="provider-grid">
+  <article><h3>PlayStation Network</h3><p>Horas e jogos do histórico PSN são importados pelo JSON exportado no Android. Sem leitura direta da conta PSN no Windows.</p><button class="ghost" data-import-mobile>Importar JSON Android</button></article>
+  <article><h3>Nintendo Switch 1 e 2</h3><p>Tempo de jogo da conta Nintendo coletado no Android e transferido pelo JSON.</p><button class="ghost" data-import-mobile>Importar JSON Android</button></article>
+  <article><h3>Xbox / Game Pass (histórico)</h3><p>A busca local detecta instalações Windows; para jogos já jogados e desinstalados, importe o histórico do Android.</p><button class="ghost" data-import-mobile>Importar JSON Android</button></article>
+  <article><h3>Riot Games</h3><p>League of Legends via WOL.GG e Valorant via Tracker.gg: horas manuais, sem scraping.</p><button class="ghost" id="sync-riot">Importar horas Riot</button></article>
+  <article><h3>Steam (biblioteca completa)</h3><p>A chave Steam Web API permite jogos não instalados; configure-a em Configurações.</p><button class="ghost" id="sync-steam-account">Atualizar conta Steam</button></article>
+  </div><p class="muted">Sincronizar launchers locais não importa automaticamente todas as horas históricas de Epic, GOG, EA, Ubisoft ou Battle.net. Onde não existir uma fonte autorizada, o Ludex mantém apenas o tempo que conseguiu medir ou importar.</p>`;
+  const host=document.querySelector<HTMLElement>('#content .page')!;
+  host.prepend(section);
+  document.querySelectorAll<HTMLButtonElement>('[data-import-mobile]').forEach(b=>b.onclick=()=>document.querySelector<HTMLInputElement>('#sync-file')?.click());
+  document.querySelector<HTMLButtonElement>('#sync-riot')!.onclick=()=>riotModal();
+  document.querySelector<HTMLButtonElement>('#sync-steam-account')!.onclick=async()=>{
+    try{
+      const status=await invoke<SteamAccountStatus>('steam_account_status');
+      if(!status.api_key_configured){toast('Configure sua Steam Web API Key em Configurações.',true);return}
+      const result=await invoke<{games_found:number;games_created:number}>('sync_steam_account');
+      toast(`Steam: ${result.games_found} jogos na conta, ${result.games_created} novos.`);await refresh(true,false)
+    }catch(error){toast('Steam: '+String(error),true)}
+  };
+  const results=document.querySelector<HTMLElement>('#provider-sync-results')!;
+  async function updateProviderStatuses(){
+    try{
+      const statuses=await invoke<Provider[]>('provider_statuses');
+      for(const s of statuses){
+        const badge=document.querySelector('#provider-status-'+s.id);
+        const info=document.querySelector('#provider-info-'+s.id);
+        if(badge){badge.textContent=s.detected?'Detectado':'Não detectado';badge.classList.toggle('ok',s.detected)}
+        if(info)info.textContent=`${s.games_found} instalações · último sync: ${date(s.last_sync)}. ${s.message}`;
+      }
+    }catch(error){if(results.isConnected)results.textContent='Diagnóstico dos launchers indisponível: '+String(error)}
+  }
+  document.querySelectorAll<HTMLButtonElement>('[data-sync-local]').forEach(button=>button.onclick=async()=>{
+    const provider=button.dataset.syncLocal!;
+    button.disabled=true;button.textContent='Sincronizando…';
+    try{
+      const result=await invoke<{games_found:number;games_created:number}>('sync_provider',{provider});
+      if(results.isConnected)results.textContent=`${providerLabel(provider)}: ${result.games_found} encontrados, ${result.games_created} novos.`;
+      await refresh(true,false);
+      void updateProviderStatuses()
+    }catch(error){if(results.isConnected)results.textContent=`${providerLabel(provider)}: ${String(error)}`;toast(String(error),true)}
+    finally{button.disabled=false;button.textContent='Sincronizar '+providerLabel(provider)}
+  });
+  const allButton=document.querySelector<HTMLButtonElement>('#sync-all-platforms')!;
+  allButton.onclick=async()=>{
+    allButton.disabled=true;allButton.textContent='Sincronizando todas…';
+    try{
+      const outcomes=await invoke<SyncOutcome[]>('sync_all_providers');
+      if(results.isConnected)results.innerHTML=outcomes.map(item=>`<div class="${item.success?'ok':'info'}">${esc(providerLabel(item.provider))}: ${item.success?`${item.games_found} jogos (${item.games_created} novos)`:esc(item.message)}</div>`).join('');
+      await refresh(true,false);
+      void updateProviderStatuses();
+      toast(`${outcomes.filter(item=>item.success).length}/${outcomes.length} launchers sincronizados.`)
+    }catch(error){if(results.isConnected)results.textContent='Erro no sincronizador: '+String(error);toast(String(error),true)}
+    finally{allButton.disabled=false;allButton.textContent='Sincronizar todos'}
+  };
+  void updateProviderStatuses();
   const input=document.querySelector<HTMLInputElement>('#sync-file')!;
   const choose=document.querySelector<HTMLButtonElement>('#choose-sync')!;
   choose.onclick=()=>input.click();
