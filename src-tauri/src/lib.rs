@@ -152,6 +152,9 @@ async fn sync_provider(
     let path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let scan = providers::scan_provider(&provider)?;
+        if scan.root.is_none() && scan.installations.is_empty() {
+            return Err(format!("{} não encontrado neste computador. A biblioteca anterior foi preservada.", provider));
+        }
         let root = scan
             .root
             .as_ref()
