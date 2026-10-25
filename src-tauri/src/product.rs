@@ -141,13 +141,19 @@ pub fn update_metadata(c: &Connection, m: &MetadataRecord) -> Result<(), String>
 }
 /// Batch cover metadata so rendering 50+ tiles does not open and migrate
 /// the SQLite database once per tile.
-pub fn artwork_catalog(c: &Connection) -> Result<std::collections::HashMap<String, String>, String> {
-    let mut statement = c.prepare(
-        "SELECT game_id,cover FROM game_metadata WHERE cover IS NOT NULL AND trim(cover)<>''",
-    ).map_err(|error| error.to_string())?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|error| error.to_string())?;
+pub fn artwork_catalog(
+    c: &Connection,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut statement = c
+        .prepare(
+            "SELECT game_id,cover FROM game_metadata WHERE cover IS NOT NULL AND trim(cover)<>''",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
     rows.collect::<Result<std::collections::HashMap<_, _>, _>>()
         .map_err(|error| error.to_string())
 }
