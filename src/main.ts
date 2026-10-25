@@ -6,6 +6,7 @@ type LibrarySource={game_id:string;source:string;seconds:number;private:boolean}
 type Installation={id:string;provider:string;external_id:string|null;executable:string|null;install_dir:string|null;installed:boolean};
 type Details={game:Game;stats:{total_seconds:number;last_14_seconds:number;last_30_seconds:number;session_count:number;average_session_seconds:number;last_played_at:string|null};installations:Installation[];recent_sessions:{id:string;started_at:string;ended_at:string|null;duration_seconds:number;provider:string|null;recovered:boolean}[]};
 type Provider={id:string;name:string;detected:boolean;root_path:string|null;games_found:number;last_sync:string|null;message:string;can_launch:boolean};
+type SyncOutcome={provider:string;games_found:number;games_created:number;success:boolean;message:string};
 type Collection={id:string;name:string;kind:string;filter_json:string|null;game_count:number};
 type Emulator={id:string;name:string;platform:string;executable:string;arguments_template:string;rom_directory:string|null;bios_directory:string|null;saves_directory:string|null;extensions:string;core:string|null;enabled:boolean};
 type Rom={id:string;game_id:string;title:string;platform:string;path:string;emulator_id:string|null;hash_sha256:string|null;size_bytes:number|null;launch_args:string|null;core:string|null};
@@ -22,7 +23,7 @@ type StoreOffer={shop:string;kind:string;price:number;regular:number|null;curren
 type StoreComparison={app_id:string;title:string;cover:string|null;offers:StoreOffer[];gg_url:string;note:string};
 
 const app=document.querySelector<HTMLDivElement>('#app')!;
-let games:Game[]=[];let librarySources:LibrarySource[]=[];let sourcesByGame=new Map<string,LibrarySource[]>();let selected:string|null=null;let details:Details|null=null;let view='library';let mode:'grid'|'list'='grid';let query='';let filter='all';let sourceFilter='all';let showPrivate=false;let sort='title';let libraryLimit=48;let gameFingerprint='';
+let games:Game[]=[];let coverIndex=new Map<string,string>();let librarySources:LibrarySource[]=[];let sourcesByGame=new Map<string,LibrarySource[]>();let selected:string|null=null;let details:Details|null=null;let view='library';let mode:'grid'|'list'='grid';let query='';let filter='all';let sourceFilter='all';let showPrivate=false;let sort='title';let libraryLimit=48;let gameFingerprint='';
 const esc=(v:string)=>v.replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]!));
 const dur=(s:number)=>{if(!s)return '0 min';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}min`:`${m}min`};
 const date=(v:string|null)=>v?new Date(v).toLocaleString('pt-BR'):'Nunca';
@@ -44,8 +45,64 @@ ${[['library','Biblioteca'],['libraries','Plataformas'],['store','Loja'],['recen
 function title(t:string){document.querySelector('#view-title')!.textContent=t}
 function filteredGames(){let v=games.filter(g=>g.title.toLowerCase().includes(query.toLowerCase()));if(!showPrivate)v=v.filter(g=>!privateGame(g));if(sourceFilter!=='all')v=v.filter(g=>gameSources(g).some(s=>s.source===sourceFilter));if(view==='recent')v=v.filter(g=>g.last_played_at).sort((a,b)=>(b.last_played_at||'').localeCompare(a.last_played_at||''));if(view==='favorites'||filter==='favorite')v=v.filter(g=>g.favorite);if(view==='installed'||filter==='installed')v=v.filter(g=>g.installed);if(filter==='uninstalled')v=v.filter(g=>!g.installed);if(filter==='never')v=v.filter(g=>sourceHours(g)===0);if(filter==='completed')v=v.filter(g=>['Concluído','100%'].includes(g.status));if(filter.startsWith('provider:'))v=v.filter(g=>gameSources(g).some(s=>s.source===filter.slice(9))||g.providers.includes(filter.slice(9)));if(sort==='playtime')v.sort((a,b)=>sourceHours(b)-sourceHours(a));else if(sort==='recent')v.sort((a,b)=>(b.last_played_at||'').localeCompare(a.last_played_at||''));else v.sort((a,b)=>a.title.localeCompare(b.title));return v}
 function cover(g:Game){return `<div class="cover-art ${g.active?'live':''}" data-cover-id="${g.id}"><span>${esc(initials(g.title))}</span>${g.active?'<b>EM JOGO</b>':''}</div>`}
-async function artworkSrc(value:string){if(/^(https?:|data:|blob:)/i.test(value))return value;return invoke<string>('resolve_artwork',{value})}
-function hydrateArtwork(){const observer=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;const node=entry.target as HTMLElement;observer.unobserve(node);const id=node.dataset.coverId;if(!id)continue;void invoke<Metadata|null>('get_metadata',{gameId:id}).then(async meta=>{if(!meta?.cover)return;const img=document.createElement('img');img.loading='lazy';img.alt='';img.onload=()=>{const initialsNode=node.querySelector('span');if(initialsNode)(initialsNode as HTMLElement).style.display='none'};img.onerror=()=>img.remove();img.src=await artworkSrc(meta.cover);node.prepend(img)}).catch(()=>{})}},{rootMargin:'120px'});document.querySelectorAll<HTMLElement>('[data-cover-id]').forEach(node=>observer.observe(node))}
+// One indexed DB read per library refresh instead of opening SQLite for every tile.
+// Resolve at most three local/Steam cover assets simultaneously off the GUI thread.
+let artworkObserver:IntersectionObserver|null=null;
+let artworkEpoch=0;
+let artworkRunning=0;
+const artworkQueue:{node:HTMLElement;value:string;epoch:number}[]=[];
+const artworkCache=new Map<string,string>();
+const artworkFailures=new Map<string,number>();
+const ARTWORK_MAX_IN_FLIGHT=3;
+function rememberArtwork(key:string,src:string){
+  // Large data URIs are intentionally not retained indefinitely in JS.
+  if(src.length>250_000)return;
+  artworkCache.delete(key);artworkCache.set(key,src);
+  if(artworkCache.size>64)artworkCache.delete(artworkCache.keys().next().value!);
+}
+async function artworkSrc(value:string){
+  if(/^(https?:|data:|blob:)/i.test(value))return value;
+  const cached=artworkCache.get(value);if(cached)return cached;
+  const src=await invoke<string>('resolve_artwork',{value});
+  rememberArtwork(value,src);return src;
+}
+function pumpArtwork(){
+  while(artworkRunning<ARTWORK_MAX_IN_FLIGHT&&artworkQueue.length){
+    const next=artworkQueue.shift()!;
+    if(!next.node.isConnected||next.epoch!==artworkEpoch)continue;
+    const failure=artworkFailures.get(next.value);
+    if(failure&&Date.now()-failure<30*60*1000)continue;
+    artworkRunning++;
+    void (async()=>{
+      try{
+        const src=await artworkSrc(next.value);
+        if(!next.node.isConnected||next.epoch!==artworkEpoch)return;
+        const img=document.createElement('img');img.loading='lazy';img.alt='';
+        img.onload=()=>{if(!next.node.isConnected)return;const initials=next.node.querySelector('span');if(initials)(initials as HTMLElement).style.display='none'};
+        img.onerror=()=>{img.remove();artworkFailures.set(next.value,Date.now())};
+        img.src=src;next.node.prepend(img);
+      }catch{artworkFailures.set(next.value,Date.now())}
+      finally{artworkRunning--;pumpArtwork()}
+    })();
+  }
+}
+async function loadCoverIndex(){
+  try{coverIndex=new Map(Object.entries(await invoke<Record<string,string>>('artwork_catalog')))}
+  catch{coverIndex=new Map()}
+}
+function hydrateArtwork(){
+  artworkObserver?.disconnect();artworkQueue.length=0;artworkEpoch++;
+  const epoch=artworkEpoch;
+  artworkObserver=new IntersectionObserver(entries=>{
+    for(const entry of entries){
+      if(!entry.isIntersecting)continue;
+      const node=entry.target as HTMLElement;artworkObserver?.unobserve(node);
+      const id=node.dataset.coverId;const value=id?coverIndex.get(id):undefined;
+      if(value){artworkQueue.push({node,value,epoch});pumpArtwork()}
+    }
+  },{rootMargin:'90px'});
+  document.querySelectorAll<HTMLElement>('[data-cover-id]').forEach(node=>artworkObserver?.observe(node));
+}
 
 function renderLibrariesHub(){
   title('Plataformas');
@@ -57,7 +114,7 @@ function renderLibrariesHub(){
   }).sort((a,b)=>b.seconds-a.seconds);
   document.querySelector('#content')!.innerHTML=`<section class="page"><div class="page-actions"><div><h2>Bibliotecas conectadas</h2><p class="muted">Os jogos de Android, Switch, PlayStation, Xbox, Riot e PC coexistem na mesma biblioteca. Cada filtro exibe apenas as horas daquela plataforma, sem perder o tempo total.</p></div><button id="go-sync" class="primary">Importar dados Android</button></div><div class="library-hub-grid"><button class="source-card" data-source="all"><strong>Todas</strong><b>${games.filter(g=>showPrivate||!privateGame(g)).length} jogos</b><span>${dur(publicGames.reduce((n,g)=>n+g.total_seconds,0))}</span></button>${totals.map(s=>`<button class="source-card" data-source="${esc(s.source)}"><strong>${esc(providerLabel(s.source))}</strong><b>${s.count} jogos</b><span>${dur(s.seconds)}</span>${s.source==='renpy'?'<small>Privado · visível somente ao selecionar</small>':''}</button>`).join('')}</div><p class="muted">Sistemas Android como Shizuku e Usage Access são executados no celular; no Windows o Ludex utiliza os dados sincronizados, sem acesso remoto ao dispositivo.</p></section>`;
   document.querySelectorAll<HTMLElement>('[data-source]').forEach(button=>button.onclick=()=>{sourceFilter=button.dataset.source||'all';if(sourceFilter==='renpy')showPrivate=true;filter='all';view='library';shell();void renderView()});
-  const sync=document.querySelector<HTMLButtonElement>('#go-sync');if(sync)sync.onclick=()=>{view='settings';shell();void renderSettings()};
+  const sync=document.querySelector<HTMLButtonElement>('#go-sync');if(sync)sync.onclick=()=>{view='sync';shell();void renderSync()};
 }
 
 function renderLibrary(){title(view==='recent'?'Recentes':view==='favorites'?'Favoritos':view==='installed'?'Instalados':sourceFilter==='all'?'Biblioteca':providerLabel(sourceFilter));const content=document.querySelector('#content')!;const visible=filteredGames();const shown=visible.slice(0,libraryLimit);if(!games.length){content.innerHTML=`<section class="onboarding"><span class="orb">L</span><h2>Monte sua biblioteca</h2><p>O Ludex pode detectar seus launchers, importar ROMs ou cadastrar jogos portáteis sem exigir conta.</p><div><button data-go="settings" class="primary">Detectar launchers</button><button id="empty-add" class="ghost">Adicionar manualmente</button></div></section>`;(document.querySelector('[data-go="settings"]') as HTMLButtonElement).onclick=()=>{view='settings';shell();void renderView()};(document.querySelector('#empty-add') as HTMLButtonElement).onclick=()=>manualModal();return}
@@ -67,7 +124,7 @@ function renderLibrary(){title(view==='recent'?'Recentes':view==='favorites'?'Fa
  const librariesButton=document.querySelector<HTMLButtonElement>('#show-libraries');if(librariesButton)librariesButton.onclick=()=>{view='libraries';shell();void renderView()};
  document.querySelectorAll<HTMLElement>('[data-filter]').forEach(b=>{b.classList.toggle('active',b.dataset.filter===filter);b.onclick=()=>{filter=b.dataset.filter!;libraryLimit=48;renderLibrary()}});const s=document.querySelector<HTMLSelectElement>('#sort')!;s.value=sort;s.onchange=()=>{sort=s.value;libraryLimit=48;renderLibrary()};document.querySelector<HTMLButtonElement>('#view-mode')!.onclick=()=>{mode=mode==='grid'?'list':'grid';renderLibrary()};document.querySelectorAll<HTMLElement>('[data-game]').forEach(b=>b.onclick=()=>void selectGame(b.dataset.game!));const more=document.querySelector<HTMLButtonElement>('#load-more');if(more)more.onclick=()=>{libraryLimit+=48;renderLibrary()};hydrateArtwork();if(selected)void selectGame(selected,false);
 }
-async function selectGame(id:string,rerender=true){selected=id;details=await invoke<Details|null>('get_game_details',{gameId:id});if(!details)return;if(rerender)renderLibrary();const pane=document.querySelector('#detail-pane');if(!pane)return;const g=details.game;let meta:Metadata|null=null;let memberships:Membership[]=[];try{meta=await invoke('get_metadata',{gameId:id})}catch{}try{memberships=await invoke('collection_memberships',{gameId:id})}catch{}const playable=details.installations.filter(i=>i.installed);pane.innerHTML=`<div class="detail-hero">${cover(g)}<div><span>${esc(g.platform)}</span><h2>${esc(g.title)}</h2><p>${esc(g.providers.map(providerLabel).join(' · ')||g.source)}</p></div></div><div class="detail-actions"><button id="play" class="primary" ${!g.installed||g.active?'disabled':''}>${g.active?'EM JOGO':g.installed?'JOGAR':'NÃO INSTALADO'}</button><button id="fav" class="ghost">${g.favorite?'★':'☆'}</button><select id="status">${['Quero jogar','Jogando','Pausado','Concluído','100%','Abandonado'].map(x=>`<option ${x===g.status?'selected':''}>${x}</option>`).join('')}</select></div>${playable.length>1?`<label>Instalação<select id="installation">${playable.map(i=>`<option value="${i.id}">${providerLabel(i.provider)}</option>`).join('')}</select></label>`:''}<div class="metric-grid"><span><b>${dur(g.total_seconds)}</b>Total</span><span><b>${dur(details.stats.last_14_seconds)}</b>2 semanas</span><span><b>${details.stats.session_count}</b>Sessões</span></div><div class="source-breakdown"><h3>Horas por plataforma</h3>${gameSources(g).filter(s=>s.seconds>0).sort((a,b)=>b.seconds-a.seconds).map(s=>`<div class="source-row"><span>${esc(providerLabel(s.source))}</span><b>${dur(s.seconds)}</b></div>`).join('')||'<p class="muted">Nenhum tempo informado.</p>'}</div><div class="metadata"><div class="section-head"><h3>Sobre</h3><button id="edit-meta" class="text-btn">Editar</button></div><p>${esc(meta?.description||'Sem descrição. Adicione metadata manual para manter sua biblioteca organizada.')}</p><small>${esc([meta?.developer,meta?.publisher,meta?.release_date,meta?.genres].filter(Boolean).join(' · '))}</small></div><div class="collections-inline"><h3>Coleções</h3><div class="chips">${memberships.map(c=>`<button data-membership="${c.id}" class="${c.included?'active':''}">${c.included?'✓ ':''}${esc(c.name)}</button>`).join('')||'<small>Nenhuma coleção criada.</small>'}</div></div><div class="sessions"><h3>Sessões recentes</h3>${details.recent_sessions.map(s=>`<div><span>${date(s.started_at)}<small>${providerLabel(s.provider||'local')}${s.recovered?' · recuperada':''}</small></span><b>${s.ended_at?dur(s.duration_seconds):'EM JOGO'}</b></div>`).join('')||'<p class="muted">Nenhuma sessão registrada.</p>'}</div>`;
+async function selectGame(id:string,rerender=true){selected=id;details=await invoke<Details|null>('get_game_details',{gameId:id});if(!details)return;if(rerender){document.querySelectorAll<HTMLElement>('[data-game]').forEach(node=>node.classList.toggle('selected',node.dataset.game===id))}const pane=document.querySelector('#detail-pane');if(!pane)return;const g=details.game;let meta:Metadata|null=null;let memberships:Membership[]=[];try{meta=await invoke('get_metadata',{gameId:id})}catch{}try{memberships=await invoke('collection_memberships',{gameId:id})}catch{}const playable=details.installations.filter(i=>i.installed);pane.innerHTML=`<div class="detail-hero">${cover(g)}<div><span>${esc(g.platform)}</span><h2>${esc(g.title)}</h2><p>${esc(g.providers.map(providerLabel).join(' · ')||g.source)}</p></div></div><div class="detail-actions"><button id="play" class="primary" ${!g.installed||g.active?'disabled':''}>${g.active?'EM JOGO':g.installed?'JOGAR':'NÃO INSTALADO'}</button><button id="fav" class="ghost">${g.favorite?'★':'☆'}</button><select id="status">${['Quero jogar','Jogando','Pausado','Concluído','100%','Abandonado'].map(x=>`<option ${x===g.status?'selected':''}>${x}</option>`).join('')}</select></div>${playable.length>1?`<label>Instalação<select id="installation">${playable.map(i=>`<option value="${i.id}">${providerLabel(i.provider)}</option>`).join('')}</select></label>`:''}<div class="metric-grid"><span><b>${dur(g.total_seconds)}</b>Total</span><span><b>${dur(details.stats.last_14_seconds)}</b>2 semanas</span><span><b>${details.stats.session_count}</b>Sessões</span></div><div class="source-breakdown"><h3>Horas por plataforma</h3>${gameSources(g).filter(s=>s.seconds>0).sort((a,b)=>b.seconds-a.seconds).map(s=>`<div class="source-row"><span>${esc(providerLabel(s.source))}</span><b>${dur(s.seconds)}</b></div>`).join('')||'<p class="muted">Nenhum tempo informado.</p>'}</div><div class="metadata"><div class="section-head"><h3>Sobre</h3><button id="edit-meta" class="text-btn">Editar</button></div><p>${esc(meta?.description||'Sem descrição. Adicione metadata manual para manter sua biblioteca organizada.')}</p><small>${esc([meta?.developer,meta?.publisher,meta?.release_date,meta?.genres].filter(Boolean).join(' · '))}</small></div><div class="collections-inline"><h3>Coleções</h3><div class="chips">${memberships.map(c=>`<button data-membership="${c.id}" class="${c.included?'active':''}">${c.included?'✓ ':''}${esc(c.name)}</button>`).join('')||'<small>Nenhuma coleção criada.</small>'}</div></div><div class="sessions"><h3>Sessões recentes</h3>${details.recent_sessions.map(s=>`<div><span>${date(s.started_at)}<small>${providerLabel(s.provider||'local')}${s.recovered?' · recuperada':''}</small></span><b>${s.ended_at?dur(s.duration_seconds):'EM JOGO'}</b></div>`).join('')||'<p class="muted">Nenhuma sessão registrada.</p>'}</div>`;
  const play=document.querySelector<HTMLButtonElement>('#play');if(play)play.onclick=async()=>{play.disabled=true;try{const installationId=document.querySelector<HTMLSelectElement>('#installation')?.value;if(installationId)await invoke('launch_game_installation',{gameId:id,installationId});else await invoke('launch_game',{gameId:id});toast('Jogo iniciado.');}catch(e){toast(String(e),true)}setTimeout(()=>void refresh(true),1200)};
  (document.querySelector('#fav') as HTMLButtonElement).onclick=async()=>{await invoke('set_favorite',{gameId:id,value:!g.favorite});await refresh(true)};(document.querySelector('#status') as HTMLSelectElement).onchange=async e=>{await invoke('set_game_status',{gameId:id,status:(e.target as HTMLSelectElement).value});await refresh(true)};(document.querySelector('#edit-meta') as HTMLButtonElement).onclick=()=>metadataModal(g,meta);document.querySelectorAll<HTMLElement>('[data-membership]').forEach(b=>b.onclick=async()=>{const item=memberships.find(x=>x.id===b.dataset.membership);if(!item)return;await invoke('set_collection_game',{collectionId:item.id,gameId:id,add:!item.included});await selectGame(id,false)});
 }
@@ -148,8 +205,8 @@ async function renderSettings(){title('Configurações');const ps=await invoke<P
 async function renderDiagnostics(){title('Diagnóstico');const [d,p]=await Promise.all([invoke<Diagnostic[]>('diagnostics'),invoke<Provider[]>('provider_statuses')]);document.querySelector('#content')!.innerHTML=`<section class="page"><div class="diagnostic-summary"><b>${p.filter(x=>x.detected).length}/${p.length}</b><span>providers detectados</span></div><div class="diag-list">${d.map(x=>`<div class="${x.level}"><b>${esc(x.area)}</b><span>${esc(x.message)}</span></div>`).join('')}${p.map(x=>`<div class="${x.detected?'ok':'info'}"><b>${esc(x.name)}</b><span>${esc(x.message)}${x.root_path?` · ${esc(x.root_path)}`:''}</span></div>`).join('')}</div><button id="copy-diag" class="ghost">Copiar diagnóstico</button></section>`;(document.querySelector('#copy-diag') as HTMLButtonElement).onclick=()=>navigator.clipboard.writeText(JSON.stringify({diagnostics:d,providers:p},null,2)).then(()=>toast('Diagnóstico copiado.'))}
 async function renderView(){if(['library','recent','favorites','installed'].includes(view))renderLibrary();else if(view==='libraries')renderLibrariesHub();else if(view==='store')await renderStore();else if(view==='collections')await renderCollections();else if(view==='emulation')await renderEmulation();else if(view==='stats')await renderStats();else if(view==='sync')await renderSync();else if(view==='settings')await renderSettings();else if(view==='diagnostics')await renderDiagnostics()}
 const fingerprint=(items:Game[])=>items.map(g=>[g.id,g.title,g.favorite,g.status,g.total_seconds,g.installed,g.active,g.last_played_at,g.session_count,g.providers.join(',')].join('~')).join('|');
-async function refresh(keep=false,forceRender=true){const [next,sources]=await Promise.all([invoke<Game[]>('list_games'),invoke<LibrarySource[]>('list_library_sources')]);const nextFingerprint=fingerprint(next)+'|'+sources.map(s=>[s.game_id,s.source,s.seconds,s.private].join(':')).join(';');const changed=nextFingerprint!==gameFingerprint;games=next;librarySources=sources;rebuildSourceIndex();gameFingerprint=nextFingerprint;if(!keep&&!selected)selected=games[0]?.id||null;if(forceRender||changed)await renderView()}
+async function refresh(keep=false,forceRender=true){const [next,sources]=await Promise.all([invoke<Game[]>('list_games'),invoke<LibrarySource[]>('list_library_sources')]);const nextFingerprint=fingerprint(next)+'|'+sources.map(s=>[s.game_id,s.source,s.seconds,s.private].join(':')).join(';');const changed=nextFingerprint!==gameFingerprint;games=next;librarySources=sources;rebuildSourceIndex();gameFingerprint=nextFingerprint;if(!keep&&!selected)selected=games[0]?.id||null;if(forceRender||changed){await loadCoverIndex();await renderView()}}
 function toast(message:string,error=false){let t=document.querySelector<HTMLDivElement>('#toast');if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t)}t.textContent=message;t.className=error?'error':'';t.classList.add('show');setTimeout(()=>t?.classList.remove('show'),3200)}
 
-async function bootstrap(){shell();await refresh();window.setTimeout(async()=>{try{const u=await invoke<UpdateInfo>('check_for_updates');if(u.available)toast(`Ludex ${u.latest_version} disponível em Configurações.`)}catch{}},1800)}
+async function bootstrap(){shell();await loadCoverIndex();await refresh();window.setTimeout(async()=>{try{const u=await invoke<UpdateInfo>('check_for_updates');if(u.available)toast(`Ludex ${u.latest_version} disponível em Configurações.`)}catch{}},1800)}
 void bootstrap();window.setInterval(()=>{if(['library','recent','favorites','installed'].includes(view))void refresh(true,false)},15000);
