@@ -139,6 +139,25 @@ pub fn update_metadata(c: &Connection, m: &MetadataRecord) -> Result<(), String>
  params![m.game_id,m.description,m.developer,m.publisher,m.release_date,m.genres,m.cover,m.hero,m.source,m.manual as i64]).map_err(|e|e.to_string())?;
     Ok(())
 }
+/// Batch cover metadata so rendering 50+ tiles does not open and migrate
+/// the SQLite database once per tile.
+pub fn artwork_catalog(
+    c: &Connection,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut statement = c
+        .prepare(
+            "SELECT game_id,cover FROM game_metadata WHERE cover IS NOT NULL AND trim(cover)<>''",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<std::collections::HashMap<_, _>, _>>()
+        .map_err(|error| error.to_string())
+}
+
 pub fn metadata(c: &Connection, game_id: &str) -> Result<Option<MetadataRecord>, String> {
     c.query_row("SELECT game_id,description,developer,publisher,release_date,genres,cover,hero,source,manual,updated_at FROM game_metadata WHERE game_id=?1",[game_id],|r|Ok(MetadataRecord{game_id:r.get(0)?,description:r.get(1)?,developer:r.get(2)?,publisher:r.get(3)?,release_date:r.get(4)?,genres:r.get(5)?,cover:r.get(6)?,hero:r.get(7)?,source:r.get(8)?,manual:r.get::<_,i64>(9)?!=0,updated_at:r.get(10)?})).optional().map_err(|e|e.to_string())
 }
