@@ -153,7 +153,10 @@ async fn sync_provider(
     tauri::async_runtime::spawn_blocking(move || {
         let scan = providers::scan_provider(&provider)?;
         if scan.root.is_none() && scan.installations.is_empty() {
-            return Err(format!("{} não encontrado neste computador. A biblioteca anterior foi preservada.", provider));
+            return Err(format!(
+                "{} não encontrado neste computador. A biblioteca anterior foi preservada.",
+                provider
+            ));
         }
         let root = scan
             .root
@@ -199,11 +202,13 @@ async fn sync_all_providers(
                 if scan.root.is_none() && scan.installations.is_empty() {
                     return Err("Launcher não encontrado neste computador".into());
                 }
-                let root = scan.root
+                let root = scan
+                    .root
                     .as_ref()
                     .map(|path| path.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let summary = product::sync_provider(&connection, provider, &scan.installations, &root)?;
+                let summary =
+                    product::sync_provider(&connection, provider, &scan.installations, &root)?;
                 if *provider == "steam" {
                     steam_data::sync(&connection)?;
                     if secrets::configured(&connection, "steam.web_api_key")? {
@@ -614,7 +619,9 @@ async fn resolve_artwork(value: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn artwork_catalog(state: tauri::State<'_, AppState>) -> Result<std::collections::HashMap<String, String>, String> {
+fn artwork_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<std::collections::HashMap<String, String>, String> {
     product::artwork_catalog(&open_product(&state.db_path)?)
 }
 #[tauri::command]
