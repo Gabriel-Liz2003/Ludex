@@ -171,6 +171,70 @@ async fn sync_provider(
     .map_err(|e| e.to_string())?
 }
 
+#[derive(serde::Serialize)]
+struct ProviderSyncOutcome {
+    provider: String,
+    games_found: usize,
+    games_created: usize,
+    success: bool,
+    message: String,
+}
+
+/// Scan known Windows launchers individually; an unavailable launcher must
+/// not erase prior library records or abort the other providers.
+#[tauri::command]
+async fn sync_all_providers(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ProviderSyncOutcome>, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_product(&path)?;
+        let mut results = Vec::new();
+        for provider in providers::PROVIDER_IDS {
+            let outcome = (|| -> Result<(usize, usize), String> {
+                let scan = providers::scan_provider(provider)?;
+                if scan.root.is_none() && scan.installations.is_empty() {
+                    return Err("Launcher não encontrado neste computador".into());
+                }
+                let root = scan.root
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let summary = product::sync_provider(&connection, provider, &scan.installations, &root)?;
+                if *provider == "steam" {
+                    steam_data::sync(&connection)?;
+                    if secrets::configured(&connection, "steam.web_api_key")? {
+                        // Remote API failure is reported but does not discard local results.
+                        if let Err(error) = steam_account::sync_owned_games(&connection) {
+                            tracing::warn!(%error, "Steam account sync failed");
+                        }
+                    }
+                }
+                Ok((summary.games_found, summary.games_created))
+            })();
+            match outcome {
+                Ok((games_found, games_created)) => results.push(ProviderSyncOutcome {
+                    provider: (*provider).into(),
+                    games_found,
+                    games_created,
+                    success: true,
+                    message: "Biblioteca local atualizada".into(),
+                }),
+                Err(message) => results.push(ProviderSyncOutcome {
+                    provider: (*provider).into(),
+                    games_found: 0,
+                    games_created: 0,
+                    success: false,
+                    message,
+                }),
+            }
+        }
+        Ok(results)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 async fn steam_status(state: tauri::State<'_, AppState>) -> Result<SteamStatus, String> {
     let path = state.db_path.clone();
@@ -539,8 +603,16 @@ fn load_local_artwork(path: String) -> Result<String, String> {
     steam_data::load_local_artwork(&path)
 }
 #[tauri::command]
-fn resolve_artwork(value: String) -> Result<String, String> {
-    steam_data::resolve_artwork(&value)
+async fn resolve_artwork(value: String) -> Result<String, String> {
+    // A Steam Store request may take seconds. Never run it on the GUI thread.
+    tauri::async_runtime::spawn_blocking(move || steam_data::resolve_artwork(&value))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn artwork_catalog(state: tauri::State<'_, AppState>) -> Result<std::collections::HashMap<String, String>, String> {
+    product::artwork_catalog(&open_product(&state.db_path)?)
 }
 #[tauri::command]
 fn steam_account_status(
@@ -665,6 +737,7 @@ pub fn run() {
             save_riot_playtime,
             provider_statuses,
             sync_provider,
+            sync_all_providers,
             steam_status,
             sync_steam,
             launch_game,
@@ -673,6 +746,7 @@ pub fn run() {
             set_game_status,
             get_metadata,
             save_metadata,
+            artwork_catalog,
             collection_memberships,
             list_collections,
             create_collection,
